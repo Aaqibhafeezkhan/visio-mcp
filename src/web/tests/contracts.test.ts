@@ -109,7 +109,13 @@ describe('contract validation', () => {
     expect(names.length).toBeGreaterThan(0);
     for (const name of names) {
       const tag = schema.$defs[name].properties.op.const;
-      expect(() => validateMutationRequest({ ...validBatch(), operations: [{ op: tag }] })).not.toThrow();
+      // `{op: tag}` alone is schema-valid for operations with no other required fields (Reroute),
+      // so validation returns before the per-op validator is ever consulted. A schema-forbidden
+      // extra property fails the union for every operation and forces that lookup, which is what
+      // used to throw `TypeError: v is not a function` for an unregistered operation (#91).
+      const r = validateMutationRequest({ ...validBatch(), operations: [{ op: tag, probe: true }] });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('invalid_request');
     }
   });
 
