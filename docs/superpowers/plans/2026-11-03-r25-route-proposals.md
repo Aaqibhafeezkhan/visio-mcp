@@ -60,18 +60,24 @@
 
 ### Task 1: Explicit reroute targets need no default page
 
+Done in 9bf691a.
+
 **Files:** `src/web/src/commands/planPatch.ts`; test `src/web/tests/routeModes.test.ts`.
-- [ ] Failing tests on a two-page document:
+- [x] Failing tests on a two-page document:
   - UUID targets without `pageId` succeed;
   - an unknown UUID is `not_found`;
   - an unknown `pageId` is `not_found`;
   - an alias without page scope is `invalid_request`;
   - an omitted-targets reroute without `pageId` still asks for a page;
   - manual, frozen and locked targets are still refused.
-- [ ] Resolve explicit targets first; call `defaultPage` only when targets are absent.
-- [ ] Run the focused and route suites, then commit.
+- [x] Resolve explicit targets first; call `defaultPage` only when targets are absent.
+- [x] Run the focused and route suites, then commit.
 
 ### Task 2: Shared planning, engine preview and projector isolation
+
+Done in 63ec08e, together with Task 3. Implementation notes:
+- `previewRoutes` also offers `drawn()`, the checked projection of the captured snapshot. A connector with no stored route takes its current geometry from it, read before planning.
+- A joined branch the commit would leave off its trunk's new route is refused as `join_not_followed`.
 
 **Files:**
 - `src/web/src/commands/CommandEngine.ts`
@@ -81,13 +87,13 @@
 - `src/web/src/agentMain.ts`
 - test `src/web/tests/routeProposals.test.ts`
 
-- [ ] Move the settle chain out of `runMutation` into one helper that takes the snapshot, operations, page scope, ID factory and route source. `runMutation` keeps doing admit (scope → dedup cache → revision) first, and keeps wrapping failures in script source spans.
-- [ ] Add `previewRoutes(scope, job)`. It runs one queue job: scope check, captured snapshot, then the caller's selection, planning and reporting.
+- [x] Move the settle chain out of `runMutation` into one helper that takes the snapshot, operations, page scope, ID factory and route source. `runMutation` keeps doing admit (scope → dedup cache → revision) first, and keeps wrapping failures in script source spans.
+- [x] Add `previewRoutes(scope, job)`. It runs one queue job: scope check, captured snapshot, then the caller's selection, planning and reporting.
   - Planning only accepts `reroute`.
   - It uses an ID factory that refuses, and a checking route source. The source records a projection that is missing, failed, thrown, mismatched or lacking a needed route.
   - It runs inside the projector's `isolate` when one is registered.
-- [ ] Add route-memory save and restore on the adapter (planned routes, signature, changes and findings; restoring also forces cells to redraw). `createSnapshotProjector` exposes `isolate`, and the editor and agent hosts pass it to the engine.
-- [ ] Tests:
+- [x] Add route-memory save and restore on the adapter (planned routes, signature, changes and findings; restoring also forces cells to redraw). `createSnapshotProjector` exposes `isolate`, and the editor and agent hosts pass it to the engine.
+- [x] Tests:
   - the engine state listed under Purity is unchanged after a successful, refused and failed preview;
   - preview runs inside `isolate`;
   - transaction, dedup, revision-conflict and span behaviour is unchanged (existing suites).
@@ -99,8 +105,8 @@
 - `src/web/src/bridge/engineHandlers.ts`
 - test `src/web/tests/routeProposals.test.ts`
 
-- [ ] Input validation, page resolution, eligibility, report building and the commit decision, per the contract above.
-- [ ] Tests:
+- [x] Input validation, page resolution, eligibility, report building and the commit decision, per the contract above.
+- [x] Tests:
   - preview points equal the geometry stored after applying `commit` through the `doc.apply` handler (no `pageId`, as `apply_operations` sends it). Cover a detour, a stressed page, pinned runs, joined branches inside the selection with an attached label, legacy connectors with no stored route, and a second page.
   - a joined branch outside the selection is `dependency_conflict`, and so is a legacy connector that settlement would write;
   - each projection failure mode is `projection_failed`, while planner-only pages need no projector;
@@ -113,13 +119,15 @@
 
 ### Task 4: MCP tool and host allowlist
 
+Done in 8c3abe8.
+
 **Files:**
 - `src/Diagram.Mcp/DiagramTools.cs`
 - `src/Diagram.App/LiveControl.cs`
 - test `tests/Diagram.Mcp.Tests/ToolTests.cs`
 
-- [ ] `propose_routes` forwards `connectorIds` and `pageId` to `doc.proposeRoutes` with the read deadline. It invents no transaction. It is listed with the other tools, and its description gives units, the read-only behaviour and how to commit.
-- [ ] Add `doc.proposeRoutes` to `LiveControl`'s offered methods.
+- [x] `propose_routes` forwards `connectorIds` and `pageId` to `doc.proposeRoutes` with the read deadline. It invents no transaction. It is listed with the other tools, and its description gives units, the read-only behaviour and how to commit.
+- [x] Add `doc.proposeRoutes` to `LiveControl`'s offered methods.
 
 ### Task 5: Real projector, documentation and evidence
 
@@ -128,5 +136,5 @@
 - `README.md`
 - `docs/m5/R25-route-proposals.md`
 
-- [ ] Browser test on the real hidden projector: a legacy connector next to an attached label. Projection and `get_objects` diagnostics are identical before and after a proposal, and proposal points equal the committed geometry.
-- [ ] Short README section; evidence report with commands, results and limits. Windows, WebView2, Visio and owner sign-off are NOT RUN on this host.
+- [x] Browser test on the real hidden projector: a legacy connector next to an attached label. Projection and `get_objects` diagnostics are identical before and after a proposal, and proposal points equal the committed geometry.
+- [x] Short README section; evidence report with commands, results and limits. Windows, WebView2, Visio and owner sign-off are NOT RUN on this host.
