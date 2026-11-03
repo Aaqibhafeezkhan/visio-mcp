@@ -1184,9 +1184,17 @@ class Planner {
 
   /** Forgets the stored route of automatic orthogonal connectors so the router plans them from scratch. Explicit, undoable, reports what changed. */
   private applyReroute(targets: readonly string[] | undefined): void {
-    const pageIdx = this.defaultPage(this.ctx.pageId);
     const explicit = !!targets;
-    const hits = explicit ? targets!.map(t => this.resolve(t, this.ctx.pageId)) : this.pages[pageIdx]!.elements.map((element, index) => ({ page: this.pages[pageIdx]!, pageIdx, index, element }));
+    // Named targets carry their own page (a UUID needs no page scope), so an MCP batch can reroute on a multipage document. Without targets
+    // the page still has to be known; a page scope that was given must exist either way.
+    let hits: Hit[];
+    if (targets) {
+      if (this.ctx.pageId) this.pageIndex(this.ctx.pageId);
+      hits = targets.map(t => this.resolve(t, this.ctx.pageId));
+    } else {
+      const pageIdx = this.defaultPage(this.ctx.pageId);
+      hits = this.pages[pageIdx]!.elements.map((element, index) => ({ page: this.pages[pageIdx]!, pageIdx, index, element }));
+    }
     for (const { pageIdx: pi, index, element } of hits) {
       if (element.kind !== 'connector' || element.route !== 'orthogonal') {
         if (explicit) stop('invalid_request', 'only orthogonal connectors can be rerouted', { target: element.id });
