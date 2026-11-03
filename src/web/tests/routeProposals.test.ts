@@ -434,6 +434,19 @@ describe('route proposals (R25)', () => {
     expect(!wrong.ok && wrong.error).toMatchObject({ code: 'invalid_request', details: { connectorIds: [uuid(912)] } });
   });
 
+  it('a page with nothing eligible, or nothing at all, gives an empty proposal with no commit', async () => {
+    const { t, h, page, events } = await scene();
+    await h.run([{ op: 'set', target: 'ab', patch: { routing: { mode: 'frozen' } } }]);
+    const before = observe(t, events);
+    const allSkipped = await h.mustPropose({ pageId: page });
+    expect(allSkipped).toMatchObject({ routes: [], skipped: [{ id: h.conn('ab').id, reason: 'frozen: its stored route is kept' }], routeFindings: [], visuallyAffectedIds: [] });
+    expect(allSkipped.commit).toBeUndefined();
+    const empty = await harness(createTestEngine({ document: newDocument() })).mustPropose({});
+    expect(empty).toMatchObject({ routes: [], skipped: [] });
+    expect(empty.commit).toBeUndefined();
+    expect(observe(t, events)).toBe(before);
+  });
+
   it('refuses a stale session or another document as other reads do', async () => {
     const { t, events } = await scene();
     const handler = createEngineHandler(t.engine);
