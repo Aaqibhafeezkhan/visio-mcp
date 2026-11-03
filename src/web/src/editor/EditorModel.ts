@@ -372,7 +372,7 @@ export class EditorModel {
       this.bump();
     };
     engine.setProjector(snapshot => this.adapter ? this.adapter.project(snapshot, this.pageId) : ok(undefined));
-    engine.setSnapshotProjector(this.projector.project);
+    engine.setSnapshotProjector(this.projector.project, this.projector.isolate);
     engine.onCommitted(() => { this.pruneSelection(); this.syncGroupFrames(); this.scheduleProtectionRead(); this.bump(); });
   }
 

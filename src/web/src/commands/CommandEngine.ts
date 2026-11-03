@@ -10,15 +10,25 @@ import { validateDocument, validateMutationRequest, validateOperation, validateS
 import { withSpan, type SourceSpan } from '../script/compiler';
 import { applyDiff, type DiffBody } from './diff';
 import { History } from './history';
-import { settleAttachments } from './attachments';
+import { settleAttachments, type RouteSource } from './attachments';
 import { settleRoutes } from './routes';
 import { settleJoins } from './joins';
-import { planPatch } from './planPatch';
+import { planPatch, type Plan } from './planPatch';
 import { readDocumentDefaults } from '../model/documentDefaults';
 import { planRoutes } from '../layout/routePlanner';
 
 export type Projector = (snapshot: Snapshot, diff: ResolvedDiff) => Result<void>;
 export type SnapshotProjector = (snapshot: Snapshot) => Result<Projection>;
+/** Runs work whose hidden projections must leave the projector as it was (R25 proposals project documents that are never committed). */
+export type ProjectionIsolation = <T>(run: () => T) => T;
+/** What a route proposal (R25) gets inside its queue job: the committed snapshot and a planner bound to it that commits nothing. */
+export interface RoutePreview {
+  before: Snapshot;
+  /** Plans reroute operations exactly as a transaction at `before` would; `after` is the document that transaction would produce. */
+  plan(operations: Operation[]): Result<{ plan: Plan; after: DiagramDocument }>;
+  /** The routes as drawn at `before` (the hidden projection), checked to belong to it; projection_failed when there is none. */
+  drawn(): Result<Projection>;
+}
 export type ScriptCompiler = (
   script: string,
   snapshot: Snapshot,
@@ -82,6 +92,7 @@ export class CommandEngine {
   private tail: Promise<unknown> = Promise.resolve();
   private projector: Projector | null = null;
   private snapshotProjector: SnapshotProjector | null = null;
+  private isolateProjection: ProjectionIsolation | null = null;
   private listeners = new Set<(e: CommittedEvent) => void>();
   private sequence = 0;
   private recoveryDegraded = false;
@@ -124,7 +135,7 @@ export class CommandEngine {
   }
 
   setProjector(project: Projector): void { this.projector = project; }
-  setSnapshotProjector(project: SnapshotProjector): void { this.snapshotProjector = project; }
+  setSnapshotProjector(project: SnapshotProjector, isolate?: ProjectionIsolation): void { this.snapshotProjector = project; this.isolateProjection = isolate ?? null; }
 
   onCommitted(listener: (event: CommittedEvent) => void): () => void {
     this.listeners.add(listener);
@@ -226,23 +237,9 @@ export class CommandEngine {
     const before = this.store.snapshot();
     const ops = produce(before);
     if (!ops.ok) return ops;
-    const planned = planPatch(before.document, ops.value, { newId: this.newId, ...(req.pageId ? { pageId: req.pageId } : {}) });
+    const planned = this.planOn(before, ops.value, req.pageId, this.newId, this.snapshotProjector);
     if (!planned.ok) return spans ? withSpan(planned, spans()) : planned;
-    const snapshotOf = (doc: DiagramDocument) => ({ ...before, revision: before.revision + 1, document: doc });
-    const joined = settleJoins(before.document, planned.value, this.snapshotProjector, snapshotOf);
-    const routed = settleRoutes(before.document, joined);
-    if (requestsHardRoutePreflight(ops.value)) {
-      const existing = new Set(before.document.pages.flatMap(page => planRoutes({ elements: page.elements, layers: page.layers, pageArea: page.widthPt * page.heightPt }).routeFindings)
-        .filter(finding => finding.code === 'UNRESOLVED_ROUTE').map(finding => finding.elementId));
-      const introduced = (routed.routeFindings ?? []).filter(finding => finding.code === 'UNRESOLVED_ROUTE' && !existing.has(finding.elementId));
-      if (introduced.length) {
-        const rejected = fail('invalid_request', 'the routing policy would leave one or more connectors without a clear route', {
-          details: { reason: 'routing_policy_unresolved', connectorIds: introduced.map(finding => finding.elementId).sort() },
-        });
-        return spans ? withSpan(rejected, spans()) : rejected;
-      }
-    }
-    const plan = settleAttachments(before.document, routed, this.snapshotProjector, snapshotOf);
+    const plan = planned.value;
     const previousRevision = before.revision;
 
     if (plan.noChange) {
@@ -255,6 +252,74 @@ export class CommandEngine {
       plan, kind: 'edit',
     });
     return this.remember(req.transactionId, hash, result);
+  }
+
+  /**
+   * Plans a batch on a snapshot without committing anything: the one planning path that transactions and route proposals (R25) share, so a
+   * proposal is what the transaction would do. Joins are settled before routes are stored, attachments after.
+   */
+  private planOn(before: Snapshot, operations: Operation[], pageId: string | undefined, newId: () => string, source: RouteSource | null): Result<Plan> {
+    const planned = planPatch(before.document, operations, { newId, ...(pageId ? { pageId } : {}) });
+    if (!planned.ok) return planned;
+    const snapshotOf = (doc: DiagramDocument) => ({ ...before, revision: before.revision + 1, document: doc });
+    const joined = settleJoins(before.document, planned.value, source, snapshotOf);
+    const routed = settleRoutes(before.document, joined);
+    if (requestsHardRoutePreflight(operations)) {
+      const existing = new Set(before.document.pages.flatMap(page => planRoutes({ elements: page.elements, layers: page.layers, pageArea: page.widthPt * page.heightPt }).routeFindings)
+        .filter(finding => finding.code === 'UNRESOLVED_ROUTE').map(finding => finding.elementId));
+      const introduced = (routed.routeFindings ?? []).filter(finding => finding.code === 'UNRESOLVED_ROUTE' && !existing.has(finding.elementId));
+      if (introduced.length) {
+        return fail('invalid_request', 'the routing policy would leave one or more connectors without a clear route', {
+          details: { reason: 'routing_policy_unresolved', connectorIds: introduced.map(finding => finding.elementId).sort() },
+        });
+      }
+    }
+    return ok(settleAttachments(before.document, routed, source, snapshotOf));
+  }
+
+  /**
+   * R25: a route proposal. One queue job captures the committed snapshot and hands the caller a planner bound to it, so selection, planning
+   * and reporting all see the same revision. Nothing is committed: store, revision, history, transaction cache, ids and listeners are not
+   * touched, and the hidden projector's route memory is put back afterwards.
+   */
+  previewRoutes<T>(scope: Scope, job: (preview: RoutePreview) => Result<T>): Promise<Result<T>> {
+    return this.enqueue(() => {
+      const s = this.checkScope(scope);
+      if (!s.ok) return s;
+      const before = this.store.snapshot();
+      const run = () => job({ before, plan: operations => this.previewPlan(before, operations), drawn: () => this.checkedProjection(before) });
+      return this.isolateProjection ? this.isolateProjection(run) : run();
+    });
+  }
+
+  private previewPlan(before: Snapshot, operations: Operation[]): Result<{ plan: Plan; after: DiagramDocument }> {
+    if (operations.some(op => op.op !== 'reroute')) return fail('invalid_request', 'a route proposal plans reroute operations only');
+    // Settling joins and attachments quietly skips a route it cannot get. A proposal must not offer that as complete, so it remembers why.
+    let unavailable: Result<never> | undefined;
+    const source: RouteSource = snapshot => {
+      const projected = this.checkedProjection(snapshot);
+      if (!projected.ok) unavailable ??= projected;
+      return projected;
+    };
+    const planned = this.planOn(before, operations, undefined, () => { throw new Error('a route proposal cannot create elements'); }, source);
+    if (!planned.ok) return planned;
+    if (unavailable) return unavailable;
+    return ok({ plan: planned.value, after: applyDiff(before.document, planned.value.forward, before.revision + 1) });
+  }
+
+  /** A projection of exactly this snapshot that holds every route joins and attachments are placed on, or projection_failed. */
+  private checkedProjection(snapshot: Snapshot): Result<Projection> {
+    if (!this.snapshotProjector) return fail('projection_failed', 'no snapshot projector is registered');
+    let projected: Result<Projection>;
+    try { projected = this.snapshotProjector(snapshot); } catch (e) { projected = fail('projection_failed', String(e)); }
+    if (!projected.ok) return fail('projection_failed', projected.error.message);
+    const p = projected.value;
+    if (p.revision !== snapshot.revision || p.sessionId !== snapshot.sessionId || p.documentId !== snapshot.documentId) {
+      return fail('projection_failed', 'the projection does not belong to the planned document');
+    }
+    const missing = routesNeeded(snapshot.document).filter(id => !p.connectors[id]?.routePoints?.length);
+    if (missing.length) return fail('projection_failed', 'the projection has no route for connectors that others are joined or attached to', { details: { connectorIds: missing } });
+    return projected;
   }
 
   private resultOf(transactionId: string, previousRevision: number, revision: number, plan: ReturnType<typeof emptyPlan>, projectionStatus: 'applied' | 'failed'): TransactionResult {
@@ -422,6 +487,19 @@ export class CommandEngine {
       return ok(undefined);
     });
   }
+}
+
+/** Connectors whose routes settling needs: the ones other connectors are joined to and the ones shapes or text are attached to. */
+function routesNeeded(doc: DiagramDocument): string[] {
+  const ids = new Set<string>();
+  for (const page of doc.pages) {
+    const connectors = new Set(page.elements.filter(e => e.kind === 'connector').map(e => e.id));
+    for (const e of page.elements) {
+      if (e.kind === 'connector') for (const ep of [e.from, e.to]) { if (ep.join && connectors.has(ep.join.connectorId)) ids.add(ep.join.connectorId); }
+      else if ((e.kind === 'shape' || e.kind === 'text') && e.attachment && connectors.has(e.attachment.connectorId)) ids.add(e.attachment.connectorId);
+    }
+  }
+  return [...ids].sort();
 }
 
 const emptyPlan = (): { created: string[]; changed: string[]; deleted: string[]; changedPageIds: string[]; changedLayerIds: string[]; changedAssetIds: string[]; visuallyAffectedIds: string[]; routeChanges?: import('../contracts/generated').RouteChange[]; routeFindings?: import('../contracts/generated').RouteFinding[] } => ({

@@ -1,5 +1,5 @@
 import type { Projection, Snapshot } from '../contracts/generated';
-import type { SnapshotProjector } from '../commands/CommandEngine';
+import type { ProjectionIsolation, SnapshotProjector } from '../commands/CommandEngine';
 import { fail, ok } from '../model/result';
 import { MaxGraphAdapter } from './MaxGraphAdapter';
 
@@ -8,7 +8,7 @@ import { MaxGraphAdapter } from './MaxGraphAdapter';
  * It never reads live drag or text-edit preview cells, so a render or export taken mid-gesture shows committed geometry.
  * I31's offscreen renderer reuses the same mapping (cellMapping.ts and the projection in MaxGraphAdapter).
  */
-export function createSnapshotProjector(assetUrl: (snapshot: Snapshot, assetId: string) => string): { project: SnapshotProjector; dispose(): void } {
+export function createSnapshotProjector(assetUrl: (snapshot: Snapshot, assetId: string) => string): { project: SnapshotProjector; isolate: ProjectionIsolation; dispose(): void } {
   let host: HTMLDivElement | null = null;
   let adapter: MaxGraphAdapter | null = null;
   let current: Snapshot | null = null;
@@ -39,6 +39,12 @@ export function createSnapshotProjector(assetUrl: (snapshot: Snapshot, assetId: 
       } catch (e) {
         return fail('projection_failed', e instanceof Error ? e.message : String(e));
       }
+    },
+    // A route proposal projects documents that are never committed; its route memory must not decide how the committed one is drawn next.
+    isolate(run) {
+      const a = ensure();
+      const saved = a.saveRouteMemory();
+      try { return run(); } finally { a.restoreRouteMemory(saved); }
     },
     dispose() { adapter?.dispose(); host?.remove(); adapter = null; host = null; },
   };
