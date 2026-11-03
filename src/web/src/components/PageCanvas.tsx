@@ -95,7 +95,7 @@ export function PageCanvas({ model }: { model: EditorModel }) {
         onDragOver={e => { if (e.dataTransfer.types.includes('application/x-diagram-shape') || e.dataTransfer.types.includes('application/x-diagram-asset')) e.preventDefault(); }}
         onDrop={onDrop}
         onMouseDown={() => setTimeout(() => frame.current?.querySelector<HTMLElement>('[data-testid=object-list]')?.focus({ preventScroll: true }), 0)} // keys go to the object list after a click, so the keyboard carries on from the clicked object
-        onContextMenu={e => { e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY }); }}
+        onContextMenu={e => { e.preventDefault(); setMenuAt({ x: e.clientX + 1, y: e.clientY + 1 }); }} // one pixel off the pointer, as maxGraph's own popup does, so the button's release reaches the shape under it rather than the menu; a release on the menu reads as a background click and clears the selection
       />
       {model.showGuides && model.viewport && <div style={{position:'absolute',left:RULER_SIZE,top:RULER_SIZE,right:0,bottom:0,pointerEvents:'none',overflow:'hidden',zIndex:4}} data-testid="guides-overlay">
         {[...model.currentPage.guides.filter(g=>g.id!==preview?.id),...(preview?[preview]:[])].map(g=>{
