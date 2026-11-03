@@ -434,6 +434,20 @@ describe('route proposals (R25)', () => {
     expect(!wrong.ok && wrong.error).toMatchObject({ code: 'invalid_request', details: { connectorIds: [uuid(912)] } });
   });
 
+  it('refuses a stale session or another document as other reads do', async () => {
+    const { t, events } = await scene();
+    const handler = createEngineHandler(t.engine);
+    const ask = (method: string, scope: { documentId: string; sessionId: string }) =>
+      handler({ protocolVersion: 1, kind: 'request', requestId: 'q', method, ...scope, params: {} } as RequestEnvelope);
+    const before = observe(t, events);
+    for (const scope of [{ ...t.scope(), sessionId: uuid(0xdead) }, { ...t.scope(), documentId: uuid(0xbeef) }]) {
+      const snapshot = await ask('doc.snapshot', scope);
+      expect(snapshot.error?.code).toMatch(/_mismatch$/);
+      expect((await ask('doc.proposeRoutes', scope)).error?.code).toBe(snapshot.error?.code);
+    }
+    expect(observe(t, events)).toBe(before);
+  });
+
   it('a proposal queued behind a mutation sees it', async () => {
     const { t, h } = await scene();
     const ab = h.conn('ab').id;
