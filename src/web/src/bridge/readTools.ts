@@ -2,6 +2,7 @@ import type { Asset, Bounds, Element, Page, Snapshot } from '../contracts/genera
 import { defaultScope, lookupTarget } from '../commands/resolveTarget';
 import { fail, ok, type Result } from '../model/result';
 import { findSwimlanes, isPartOfSwimlane, membershipOf, type Membership } from '../layout/swimlane';
+import { containerParents, isContainer } from '../layout/containers';
 
 export interface SummaryOptions { pageId?: string; includeGeometry?: boolean; includeStyle?: boolean; includeHidden?: boolean }
 
@@ -37,6 +38,10 @@ export interface ElementSummary {
   assetId?: string;
   /** group */
   childIds?: string[];
+  /** R17: a container shape's direct members and fit settings */
+  container?: unknown;
+  /** R17: the container that lists this element directly, when there is one */
+  containerId?: string;
   /** Where the element sits in a swim-lane on the page (by its middle), when there is one. */
   lane?: Membership;
 }
@@ -62,6 +67,7 @@ export function summariseElement(el: Element, o: { includeGeometry: boolean; inc
   if ((el.kind === 'shape' || el.kind === 'text') && el.attachment) s.attachedTo = el.attachment;
   if (el.kind === 'image') s.assetId = el.assetId;
   if (el.kind === 'group') s.childIds = el.childIds;
+  if (isContainer(el)) s.container = el.container;
   return s;
 }
 
@@ -80,6 +86,7 @@ export function readSummary(snapshot: Snapshot, options: SummaryOptions = {}): R
     const shown = page.elements.filter(e => includeHidden || (!e.hidden && !hiddenByLayer(page, e)));
     for (const e of shown) if (e.kind === 'image') used.add(e.assetId);
     const swimlanes = findSwimlanes(page);
+    const homes = containerParents(page.elements);
     return {
       id: page.id, name: page.name, widthPt: page.widthPt, heightPt: page.heightPt,
       layers: page.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, locked: l.locked, elementCount: page.elements.filter(e => e.layerIds.includes(l.id)).length })),
@@ -87,6 +94,8 @@ export function readSummary(snapshot: Snapshot, options: SummaryOptions = {}): R
       omittedHidden: page.elements.length - shown.length,
       elements: shown.map(e => {
         const s = summariseElement(e, o);
+        const home = homes.get(e.id);
+        if (home !== undefined) s.containerId = home;
         if (swimlanes.length && e.kind !== 'group' && e.kind !== 'connector' && !isPartOfSwimlane(swimlanes, e.id)) { const m = membershipOf(swimlanes, e.bounds); if (m) s.lane = m; }
         return s;
       }),
@@ -107,8 +116,10 @@ export function readObjects(snapshot: Snapshot, ids: readonly string[], pageId?:
   for (const ref of ids) {
     const hit = lookupTarget(doc.pages, ref, scope);
     if (!hit.ok) return fail(hit.code, hit.message, { details: hit.details });
-    const element = doc.pages[hit.pageIdx]!.elements[hit.index]!;
-    out.push({ ...element, level: element.level ?? 0 } as Element);
+    const page = doc.pages[hit.pageIdx]!;
+    const element = page.elements[hit.index]!;
+    const home = containerParents(page.elements).get(element.id); // R17: derived, like the effective level
+    out.push({ ...element, level: element.level ?? 0, ...(home !== undefined ? { containerId: home } : {}) } as Element);
   }
   return ok(out);
 }

@@ -408,6 +408,21 @@ class Compiler {
     return hit!;
   }
 
+  /** R17: `container=none|grow|fit` makes a shape a container (or changes how it fits its members); `margin=` is the clearance grow and fit keep. */
+  private containerSettings(): { fit?: 'none' | 'grow' | 'fit'; marginPt?: number } | undefined {
+    if (!this.has('container')) {
+      if (this.has('margin')) this.err('margin= goes with container=', this.raw('margin')!.keyToken);
+      return undefined;
+    }
+    const out: { fit?: 'none' | 'grow' | 'fit'; marginPt?: number } = { fit: this.enumValue(this.raw('container')!, ['none', 'grow', 'fit'] as const) };
+    if (this.has('margin')) {
+      const marginPt = this.dim(this.raw('margin')!);
+      if (marginPt < 0 || marginPt > 500) this.err('margin= must be between 0pt and 500pt', this.raw('margin')!.value);
+      out.marginPt = marginPt;
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- commands
   command(cmd: Command): void {
     this.current = cmd;
@@ -416,6 +431,7 @@ class Compiler {
       case 'add': return this.cmdAdd(cmd);
       case 'connect': return this.cmdConnect(cmd);
       case 'group': return this.cmdGroup(cmd);
+      case 'contain': return this.cmdContain(cmd);
       case 'set': return this.cmdSet(cmd);
       case 'move': return this.cmdMove(cmd);
       case 'resize': return this.cmdResize(cmd);
@@ -432,7 +448,7 @@ class Compiler {
       case 'layer': return this.cmdLayer(cmd);
       case 'asset': return this.cmdAsset(cmd);
       default:
-        return this.err(`unknown command "${cmd.verb}"`, cmd.verbToken, 'commands: page, add, connect, group, set, move, resize, rotate, delete, duplicate, align, distribute, set-gap, z, reroute, move-segment, pin-segment, unpin-segment, layer, asset');
+        return this.err(`unknown command "${cmd.verb}"`, cmd.verbToken, 'commands: page, add, connect, group, contain, set, move, resize, rotate, delete, duplicate, align, distribute, set-gap, z, reroute, move-segment, pin-segment, unpin-segment, layer, asset');
     }
   }
 
@@ -513,7 +529,7 @@ class Compiler {
     const base = ['id', 'uuid', 'x', 'y', 'w', 'h', 'name', 'layer', 'rotate', 'level', 'on', 'at', 'offset'];
 
     if (what === 'shape') {
-      this.finish([...base, 'type', 'cornerRadius', 'fill', 'stroke', 'strokeWidth', 'dash', 'lineCap', 'lineJoin', ...Compiler.TEXT_KEYS]);
+      this.finish([...base, 'type', 'cornerRadius', 'fill', 'stroke', 'strokeWidth', 'dash', 'lineCap', 'lineJoin', 'container', 'margin', ...Compiler.TEXT_KEYS]);
       const op: Operation = { op: 'createShape', ...common, bounds: this.bounds() };
       const geometry: Record<string, unknown> = {};
       geometry.preset = this.has('type') ? this.preset(this.raw('type')!) : 'rectangle';
@@ -524,6 +540,7 @@ class Compiler {
       const text = this.textPatch(new Set());
       if (Object.keys(text).length) op.text = text as never;
       const att = this.attachmentInput(); if (att) op.attachment = att;
+      const container = this.containerSettings(); if (container) op.container = container;
       this.emit(op);
       this.register(alias, { id, kind: 'shape' }, this.raw('id')?.value ?? cmd.span);
       return;
@@ -651,6 +668,26 @@ class Compiler {
     this.register(alias, { id, kind: 'group' }, this.raw('id')?.value ?? cmd.span);
   }
 
+  // ---- contain (R17)
+  /** `contain zone add web db`, `contain zone remove db`, `contain zone disband` (the shape stays; its members move up a level). */
+  private cmdContain(cmd: Command): void {
+    this.begin(cmd);
+    this.finish([]);
+    const [containerTok, actionTok, ...rest] = this.args.pos;
+    if (!containerTok || !actionTok) this.err('contain needs a container and add, remove or disband: contain zone add web db', cmd.span);
+    const container = this.target(containerTok!);
+    if (container.kind !== 'shape') this.err(`only a shape can be a container; "${containerTok!.type === 'word' ? containerTok!.text : 'that'}" is a ${container.kind}`, containerTok!);
+    const action = actionTok!.type === 'word' ? actionTok!.text : '';
+    if (action === 'disband') {
+      if (rest.length) this.err('contain ... disband takes no targets', rest[0]!);
+      this.emit({ op: 'set', target: container.id, patch: { container: null } });
+      return;
+    }
+    if (action !== 'add' && action !== 'remove') this.err('contain needs add, remove or disband after the container', actionTok!);
+    const targets = this.ids(rest, 1, `contain ${action}`);
+    this.emit(action === 'add' ? { op: 'contain', container: container.id, add: targets } : { op: 'contain', container: container.id, remove: targets });
+  }
+
   // ---- set
   private cmdSet(cmd: Command): void {
     this.begin(cmd);
@@ -752,6 +789,15 @@ class Compiler {
       if (!isConnector) this.err('hops= applies to connectors', this.raw('hops')!.keyToken);
       patch.hops = this.enumValue(this.raw('hops')!, ['none', 'arc'] as const); handled.add('hops');
     }
+    if (this.has('container') || this.has('margin')) {
+      if (known.kind !== 'shape') this.err('container= and margin= apply to shapes', (this.raw('container') ?? this.raw('margin'))!.keyToken);
+      if (!this.has('container')) {
+        const marginPt = this.dim(this.raw('margin')!);
+        if (marginPt < 0 || marginPt > 500) this.err('margin= must be between 0pt and 500pt', this.raw('margin')!.value);
+        patch.container = { marginPt };
+      } else patch.container = this.containerSettings();
+      handled.add('container'); handled.add('margin');
+    }
     for (const n of cmd.named) {
       if (!handled.has(n.key)) this.err(`unknown field "${n.key}" for set`, n.keyToken, 'to change position or size use move, resize, rotate');
     }
@@ -821,9 +867,13 @@ class Compiler {
 
   private cmdDelete(cmd: Command): void {
     this.begin(cmd);
-    this.finish(['withConnectors', 'children']);
+    this.finish(['withConnectors', 'children', 'members']);
     const known = this.single(cmd, 'delete');
     const op: Operation = { op: 'delete', target: known.id };
+    if (this.has('members')) {
+      if (known.kind !== 'shape') this.err('members= applies only to a container', this.raw('members')!.keyToken);
+      op.members = this.enumValue(this.raw('members')!, ['delete', 'keep'] as const);
+    }
     if (this.has('withConnectors')) op.withConnectors = this.bool(this.raw('withConnectors')!);
     if (this.has('children')) {
       if (known.kind !== 'group') this.err('children= applies only to a group', this.raw('children')!.keyToken);

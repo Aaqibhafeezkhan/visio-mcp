@@ -159,6 +159,7 @@ if (import.meta.env.VITE_TEST_API === '1') {
     changesSince: async (revision: number) => { const m = cur(); const r = await m.engine.getChanges(m.engine.scope(), revision); return r.ok ? JSON.parse(JSON.stringify(r.value)) : { error: r.error }; },
     targets: () => [...cur().targets],
     gestureActive: () => cur().controller.isActive(),
+    dragCells: () => ((cur().canvas!.graph.getPlugin('SelectionHandler') as unknown as { cells?: { getId(): string | null }[] | null }).cells ?? []).map(c => c.getId()),
     agentApply: (operations: unknown[], baseRevision?: number) => { const m = cur(); return m.engine.execute({
       ...m.engine.scope(), transactionId: crypto.randomUUID(), baseRevision: baseRevision ?? m.engine.revision, atomic: true, operations,
     } as never, 'mcp'); },

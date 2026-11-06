@@ -8,7 +8,7 @@ export interface ArrangeAction {
   disabled: boolean;
   run: () => void;
   /** Actions in one section are shown together, with a separator between sections. */
-  section: 'group' | 'order' | 'align' | 'distribute';
+  section: 'group' | 'container' | 'order' | 'align' | 'distribute';
 }
 
 /** The one list of structural actions. The Arrange menu, the context menu and the Arrange panel all render it, so they cannot disagree. */
@@ -16,11 +16,16 @@ export function arrangeActions(model: EditorModel): ArrangeAction[] {
   const targets = model.targets;
   const n = targets.length;
   const hasGroup = targets.some(t => findElement(model.snapshot, t)?.kind === 'group');
+  const { containers, others, members } = model.containerSelection;
   const act = (id: string, label: string, section: ArrangeAction['section'], enabled: boolean, run: () => Promise<void>, shortcut?: string): ArrangeAction =>
     ({ id, label, section, disabled: !enabled, run: () => void run(), ...(shortcut ? { shortcut } : {}) });
   return [
     act('group', 'Group', 'group', n >= 2, () => model.group(), 'Ctrl+G'),
     act('ungroup', 'Ungroup', 'group', hasGroup, () => model.ungroup(), 'Ctrl+Shift+G'),
+    act('make-container', 'Make container', 'container', n >= 1, () => model.makeContainer()),
+    act('add-to-container', 'Add to container', 'container', containers.length >= 1 && (others.length >= 1 || containers.length >= 2), () => model.addToContainer()),
+    act('remove-from-container', 'Remove from container', 'container', members.length >= 1, () => model.removeFromContainer()),
+    act('disband-container', 'Disband container', 'container', containers.length >= 1, () => model.disbandContainer()),
     act('front', 'Bring to front', 'order', n >= 1, () => model.reorder('front'), 'Ctrl+Shift+F'),
     act('forward', 'Bring forward', 'order', n >= 1, () => model.reorder('forward')),
     act('backward', 'Send backward', 'order', n >= 1, () => model.reorder('backward')),

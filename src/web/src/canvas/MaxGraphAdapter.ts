@@ -13,6 +13,7 @@ import { edgeStyle, effectiveState, labelOf, registerCustomShapes, vertexStyle }
 import { planRoutes, type PlannedRoute, type RouteChange } from '../layout/routePlanner';
 import { installGestureHooks } from './gestureHooks';
 import { pageOf } from './intents';
+import { carriedConnectors, carriedLeaves } from './selection';
 
 const MARGIN_PT = 40;
 const PX_PER_PT = 96 / 72; // 100% zoom
@@ -96,6 +97,17 @@ export class MaxGraphAdapter implements CanvasAdapter {
           const raw = delta.clone(); paint(bounds, delta, gridEnabled, clone); return raw;
         };
         return guide;
+      };
+      // R17: a container's members travel with it during the drag, so the live preview shows what the drop will commit
+      const getCells = selectionHandler.getCells.bind(selectionHandler);
+      selectionHandler.getCells = (initial: Cell) => {
+        const cells = getCells(initial);
+        if (!this.projected) return cells;
+        const ids = new Set(cells.map(c => c.getId() ?? ''));
+        const model = this.graph.getDataModel();
+        const carried = [...carriedLeaves(this.projected, [...ids]), ...carriedConnectors(this.projected, [...ids])];
+        const extra = carried.filter(id => !ids.has(id)).map(id => model.getCell(id)).filter((c): c is Cell => !!c && this.graph.isCellMovable(c));
+        return [...cells, ...extra];
       };
     }
     this.installEditRedirects();
@@ -207,8 +219,12 @@ export class MaxGraphAdapter implements CanvasAdapter {
   /** The page shown. A page that no longer exists falls back to the first. */
   pageId: string | undefined;
 
+  /** The snapshot last projected, for questions about structure (R17 containers) that the cells alone cannot answer. */
+  private projected: Snapshot | undefined;
+
   project(snapshot: Snapshot, pageId: string | undefined = this.pageId): Result<void> {
     if (this.disposed) return ok(undefined);
+    this.projected = snapshot;
     const page = pageOf(snapshot, pageId);
     this.pageId = page.id;
     const selected = this.getSelection();
@@ -232,7 +248,7 @@ export class MaxGraphAdapter implements CanvasAdapter {
       const sig = canonicalSerialize([...wanted.values()].map(e => e.kind === 'connector'
         ? { id: e.id, f: e.from, t: e.to, w: e.waypoints, r: e.route, g: e.routing, rp: e.routingPolicy, label: e.label, anchor: e.labelAnchor, sw: e.style.widthPt }
         : { id: e.id, b: e.bounds, rot: e.rotationDeg, h: e.hidden, l: e.layerIds, k: e.kind, rp: 'routingPolicy' in e ? e.routingPolicy : undefined,
-          fi: e.kind === 'shape' ? [e.style.fill.kind, e.style.stroke.kind, e.style.strokeWidthPt, e.text] : e.kind === 'text' ? e.text : 0 }).concat(page.layers.map(l => ({ id: l.id, v: l.visible })) as never[]), );
+          fi: e.kind === 'shape' ? [e.style.fill.kind, e.style.stroke.kind, e.style.strokeWidthPt, e.text, (e.container?.memberIds.length ?? 0) > 0] : e.kind === 'text' ? e.text : 0 }).concat(page.layers.map(l => ({ id: l.id, v: l.visible })) as never[]), );
       if (sig !== this.routingSig) {
         this.routingSig = sig;
         const plan = planRoutes({ elements: [...wanted.values()], layers: page.layers, pageArea: this.pageWidth * this.pageHeight, previous: this.planned });

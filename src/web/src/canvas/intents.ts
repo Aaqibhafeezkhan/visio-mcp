@@ -1,7 +1,9 @@
 import type { Bounds, Element, Endpoint, Operation, Page, Point, Snapshot } from '../contracts/generated';
 import { visualBounds, unionBounds } from '../commands/geometry';
 import { anchorsOf, guideCorrection, layersSnap, type GuideSnapOptions } from './guideSnapping';
-import { collapseToGroups, leavesOfTargets } from './selection';
+import { carriedLeaves, collapseToGroups, leavesOfTargets, outermostTargets } from './selection';
+import { containerParents, isContainer, isInside as isInsideContainer } from '../layout/containers';
+import { parentMap } from '../commands/groups';
 
 /**
  * Pure translation from what the user did on the canvas into canonical operations. Snapping happens here, in the interaction
@@ -42,7 +44,8 @@ const round = (v: number, places = 9) => Math.round(v * 10 ** places) / 10 ** pl
 const movesByItself = (e: Element) => e.kind !== 'connector' || e.from.glue === 'none' || e.to.glue === 'none' || e.waypoints.length > 0;
 
 export function moveOperations(snapshot: Snapshot, ids: string[], dx: number, dy: number, guides?: GuideSnapOptions): Operation[] {
-  const elements = ids.map(id => findElement(snapshot, id)).filter((e): e is Element => !!e && movesByItself(e));
+  // R17: whatever is inside a moved container goes with it, so only the outermost objects are moved
+  const elements = outermostTargets(snapshot, ids).map(id => findElement(snapshot, id)).filter((e): e is Element => !!e && movesByItself(e));
   if (!elements.length || (dx === 0 && dy === 0)) return []; // no movement is no edit, however far from the grid the element sits
   // Snap the lead element's top-left to the grid and move everything by the same corrected delta, so relative layout is kept.
   const lead = elements.find(e => e.kind !== 'connector') ?? elements[0]!;
@@ -116,7 +119,11 @@ export function rotateOperations(snapshot: Snapshot, id: string, deltaDeg: numbe
 
 export function intentOperations(snapshot: Snapshot, intent: Intent, guides?: GuideSnapOptions): Operation[] {
   switch (intent.type) {
-    case 'move': return moveOperations(snapshot, intent.ids, intent.dx, intent.dy, guides);
+    case 'move': {
+      const moves = moveOperations(snapshot, intent.ids, intent.dx, intent.dy, guides);
+      const first = moves[0];
+      return first?.op === 'move' ? [...moves, ...membershipAfterDrag(snapshot, moves.map(m => (m as { target: string }).target), first.delta.xPt, first.delta.yPt)] : moves;
+    }
     case 'resize': return resizeOperations(snapshot, intent.id, intent.bounds, guides);
     case 'rotate': return rotateOperations(snapshot, intent.id, intent.deltaDeg);
     case 'bend': return [{ op: 'set', target: intent.id, patch: { waypoints: intent.waypoints.map(p => ({ x: round(p.x, 3), y: round(p.y, 3) })) } }];
@@ -135,8 +142,9 @@ export function intentOperations(snapshot: Snapshot, intent: Intent, guides?: Gu
  * selected is deleted as one object, members included; members of a partly selected group are removed from it.
  */
 export function deleteOperations(snapshot: Snapshot, ids: string[]): Operation[] {
-  const targets = collapseToGroups(snapshot, ids);
-  const doomed = new Set(leavesOfTargets(snapshot, targets));
+  // R17: a container goes with everything inside it (as in Visio), so what it holds is not deleted a second time
+  const targets = outermostTargets(snapshot, collapseToGroups(snapshot, ids));
+  const doomed = new Set([...leavesOfTargets(snapshot, targets), ...carriedLeaves(snapshot, targets)]);
   const ops: Operation[] = [];
   for (const id of targets) {
     const el = findElement(snapshot, id);
@@ -145,12 +153,59 @@ export function deleteOperations(snapshot: Snapshot, ids: string[]): Operation[]
       const covered = [el.from, el.to].some(ep => ep.elementId && doomed.has(ep.elementId));
       if (!covered) ops.push({ op: 'delete', target: id });
     } else if (el.kind === 'group') ops.push({ op: 'delete', target: id, children: 'delete', withConnectors: true });
+    else if (isContainer(el) && el.container.memberIds.length) ops.push({ op: 'delete', target: id, members: 'delete', withConnectors: true });
     else ops.push({ op: 'delete', target: id, withConnectors: true });
   }
   return ops;
 }
 
 export function nudgeOperations(snapshot: Snapshot, ids: string[], dx: number, dy: number): Operation[] {
-  return ids.map(id => findElement(snapshot, id)).filter((e): e is Element => !!e && movesByItself(e) && !e.locked)
+  return outermostTargets(snapshot, ids).map(id => findElement(snapshot, id)).filter((e): e is Element => !!e && movesByItself(e) && !e.locked)
     .map(e => ({ op: 'move', target: e.id, delta: { xPt: dx, yPt: dy } }) as Operation);
+}
+
+/**
+ * R17: dropping something wholly inside a container makes it a member of the smallest one, and dragging a member completely clear of its
+ * container takes it out (it then belongs to that container's own container, if any). Only top-level objects take part, since a container
+ * and its members share a group; locked containers are left alone. The changes join the move's transaction, so one undo reverses both.
+ */
+export function membershipAfterDrag(snapshot: Snapshot, moved: readonly string[], dx: number, dy: number): Operation[] {
+  if (!moved.length) return [];
+  const page = pageContaining(snapshot, moved[0]!);
+  const groupParents = parentMap(page.elements);
+  const holders = containerParents(page.elements);
+  const byId = new Map(page.elements.map(e => [e.id, e] as const));
+  const locked = (e: Element) => e.locked || e.layerIds.some(l => page.layers.find(x => x.id === l)?.locked);
+  const top = (id: string) => { let x = id; for (let p = groupParents.get(x); p !== undefined; p = groupParents.get(p)) x = p; return x; };
+  const units = [...new Set(moved.map(top))].filter(id => {
+    const e = byId.get(id);
+    return e && !groupParents.has(id) && (e.kind !== 'connector' || (e.from.glue === 'none' && e.to.glue === 'none' && !e.from.join && !e.to.join));
+  });
+  const travelling = new Set([...units, ...leavesOfTargets(snapshot, units), ...carriedLeaves(snapshot, units)]);
+  for (const id of [...travelling]) for (let p = groupParents.get(id); p !== undefined; p = groupParents.get(p)) travelling.add(p);
+  const candidates = page.elements.filter(e => isContainer(e) && !travelling.has(e.id) && !groupParents.has(e.id) && !locked(e));
+  const inside = (o: Bounds, i: Bounds) => i.x >= o.x && i.y >= o.y && i.x + i.width <= o.x + o.width && i.y + i.height <= o.y + o.height;
+  const clear = (a: Bounds, b: Bounds) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+  const adds = new Map<string, string[]>(), removes = new Map<string, string[]>();
+  const push = (m: Map<string, string[]>, k: string, v: string) => m.set(k, [...(m.get(k) ?? []), v]);
+  for (const id of units) {
+    const b0 = visualBounds(byId.get(id)!), box = { ...b0, x: b0.x + dx, y: b0.y + dy };
+    const now = holders.get(id);
+    const current = now === undefined ? undefined : byId.get(now);
+    // still touching its container: it stays, unless it was dropped wholly into a container inside that one
+    const staying = current !== undefined && !clear(current.bounds, box);
+    const deeper = (c: Element) => now !== undefined && isInsideContainer(holders, c.id, now);
+    const home = candidates.filter(c => inside(c.bounds, box) && (!staying || deeper(c))).sort((a, b) => a.bounds.width * a.bounds.height - b.bounds.width * b.bounds.height)[0];
+    if (home && home.id !== now) push(adds, home.id, id);
+    else if (staying) continue;
+    else if (!home) {
+      // a removed member passes up to the next container, so it leaves each one it now lies clear of, up to the first it still touches
+      for (let c = current; c !== undefined && clear(c.bounds, box) && !travelling.has(c.id) && !locked(c); c = byId.get(holders.get(c.id) ?? '')) push(removes, c.id, id);
+    }
+  }
+  const depth = (id: string) => { let n = 0; for (let p = holders.get(id); p !== undefined; p = holders.get(p)) n++; return n; };
+  return [
+    ...[...removes].sort(([a], [b]) => depth(b) - depth(a)).map(([container, remove]) => ({ op: 'contain', container, remove }) as Operation),
+    ...[...adds].map(([container, add]) => ({ op: 'contain', container, add }) as Operation),
+  ];
 }

@@ -6,9 +6,11 @@ import { measureTextBox, TextMeasurementLimitError, type TextMeasurement } from 
 import { parsePath } from '../geometry/svgPath';
 import { inspectNearAlignments, isVisibleThinRule } from './inspectAlignment';
 import { passesBehind } from './routingPolicy';
-import { effectiveLevel } from '../model/elementOrder';
+import { compareElementOrder, effectiveLevel } from '../model/elementOrder';
 import { inspectRoutes, intendedCrossing } from './inspectRoutes';
 import { findSwimlanes, isLaneStructure, isPartOfSwimlane, lanesCrossed, membershipOf } from './swimlane';
+import { containerParents, holdsEnd, isContainer, isInside } from './containers';
+import { leavesUnder } from '../commands/groups';
 
 export type Severity = 'info' | 'warning' | 'error';
 
@@ -99,6 +101,12 @@ function inspectPage(page: Page, ctx: LayoutContext, issues: LayoutIssue[], note
     issues.push({ code, severity, elementIds: ids, pageId: page.id, bounds, message, evidence });
   const pageBox: Bounds = { x: 0, y: 0, width: page.widthPt, height: page.heightPt };
   const swimlanes = findSwimlanes(page);
+  const holders = containerParents(page.elements);
+  /** R17: is `id` inside container `containerId` at any depth, directly or through the group that holds it? */
+  const within = (id: string, containerId: string): boolean => {
+    for (let x: string | undefined = id; x !== undefined; x = parents.get(x)) if (isInside(holders, x, containerId)) return true;
+    return false;
+  };
 
   for (const el of shown) {
     if (el.kind === 'group') continue;
@@ -130,8 +138,9 @@ function inspectPage(page: Page, ctx: LayoutContext, issues: LayoutIssue[], note
       }
     }
 
-    if (el.kind === 'connector') connectorChecks(el, add, ctx, byId, parents, shown, page.widthPt * page.heightPt);
+    if (el.kind === 'connector') connectorChecks(el, add, ctx, byId, parents, shown, page.widthPt * page.heightPt, holders);
   }
+  if (holders.size || page.elements.some(isContainer)) containerChecks(page, shown, byId, parents, holders, within, add);
 
   const alignment = inspectNearAlignments(page, shown, parents);
   issues.push(...alignment.issues);
@@ -164,6 +173,7 @@ function inspectPage(page: Page, ctx: LayoutContext, issues: LayoutIssue[], note
       if (hit.width * hit.height >= 0.98 * smaller) continue; // one sits inside the other: a container, not a collision
       if (hit.width * hit.height < 0.1 * smaller) continue;
       if (sharesGroup(a.e.id, b.e.id, parents)) continue;
+      if ((isContainer(a.e) && within(b.e.id, a.e.id)) || (isContainer(b.e) && within(a.e.id, b.e.id))) continue; // R17: a container holds its members by design
       add('OVERLAP', 'warning', [a.e.id, b.e.id].sort(), hit, 'Two shapes overlap without one containing the other.', { overlapAreaPt2: Math.round(hit.width * hit.height), fractionOfSmaller: Math.round((hit.width * hit.height / smaller) * 100) / 100 });
     }
   }
@@ -174,6 +184,59 @@ function inspectPage(page: Page, ctx: LayoutContext, issues: LayoutIssue[], note
     inspectRoutes(page, shown, routes, add);
   }
 }
+
+/**
+ * R17 containment findings. Members that stick out of their container, elements that sit wholly inside a container without belonging to it,
+ * and containers whose fill is drawn over one of their own members.
+ */
+function containerChecks(
+  page: Page, shown: Element[], byId: ReadonlyMap<string, Element>, parents: ReadonlyMap<string, string>, holders: ReadonlyMap<string, string>,
+  within: (id: string, containerId: string) => boolean,
+  add: (c: string, s: Severity, ids: string[], b: Bounds, m: string, e?: Record<string, unknown>) => void,
+): void {
+  const visible = new Set(shown.map(e => e.id));
+  const containers = shown.filter(isContainer);
+  for (const c of containers) {
+    const frame = c.bounds;
+    for (const m of c.container.memberIds) {
+      const member = byId.get(m);
+      if (!member || !visible.has(m)) continue;
+      const b = visualBounds(member);
+      const over = { left: frame.x - b.x, top: frame.y - b.y, right: b.x + b.width - frame.x - frame.width, bottom: b.y + b.height - frame.y - frame.height };
+      if (Object.values(over).some(v => v > OUTSIDE_TOLERANCE)) {
+        add('MEMBER_OUTSIDE_CONTAINER', 'warning', [m, c.id], union([b, frame]), 'A member of a container extends outside it.',
+          { containerId: c.id, overhangPt: Object.fromEntries(Object.entries(over).map(([k, v]) => [k, Math.max(0, Math.round(v * 100) / 100)])) });
+      }
+      // A filled container drawn in front of a member covers it.
+      const fill = c.style.fill;
+      if (fill.kind !== 'none' && (!('opacity' in fill) || fill.opacity > 0)) {
+        const covered = leavesUnder(byId, m).map(id => byId.get(id)!).filter(l => visible.has(l.id) && compareElementOrder(c, l) > 0 && intersect(frame, visualBounds(l)));
+        if (covered.length) add('CONTAINER_HIDES_MEMBER', 'warning', [c.id, ...covered.map(l => l.id).sort()], frame, 'A filled container is drawn in front of its own members and hides them; send it back.',
+          { containerId: c.id, hiddenElementIds: covered.map(l => l.id).sort() });
+      }
+    }
+  }
+  // Whole units only (top-level elements and groups), each reported once against the smallest container that holds it. A line free at
+  // both ends is drawn like a shape and only moves with a container if it is a member; a glued connector follows its shapes anyway.
+  for (const el of shown) {
+    if (el.kind === 'connector' && (el.from.glue !== 'none' || el.to.glue !== 'none' || el.from.join || el.to.join)) continue;
+    if (parents.has(el.id) || isLaneStructure(el)) continue;
+    const b = visualBounds(el);
+    const around = containers.filter(c => c.id !== el.id && !within(c.id, el.id) && contains(c.bounds, b));
+    if (!around.length) continue;
+    const smallest = around.reduce((x, y) => (area(y.bounds) < area(x.bounds) ? y : x));
+    if (within(el.id, smallest.id)) continue;
+    add('UNLISTED_INSIDE_CONTAINER', 'info', [el.id, smallest.id], b, 'The element sits inside a container but is not one of its members, so it will not move with it.',
+      { containerId: smallest.id, ...(holders.has(el.id) ? { memberOf: holders.get(el.id) } : {}) });
+  }
+}
+
+/** A member may overhang its container by this much (points) before it is reported: imported drawings are rarely exact. */
+const OUTSIDE_TOLERANCE = 2;
+const freeEndInside = (c: Extract<Element, { kind: 'connector' }>, b: Bounds): boolean =>
+  [c.from, c.to].some(ep => ep.glue === 'none' && !ep.join && !!ep.point && ep.point.x > b.x && ep.point.x < b.x + b.width && ep.point.y > b.y && ep.point.y < b.y + b.height);
+const contains = (outer: Bounds, inner: Bounds): boolean =>
+  inner.x >= outer.x - EPS && inner.y >= outer.y - EPS && inner.x + inner.width <= outer.x + outer.width + EPS && inner.y + inner.height <= outer.y + outer.height + EPS;
 
 function sharesGroup(a: string, b: string, parents: ReadonlyMap<string, string>): boolean {
   return parents.get(a) !== undefined && parents.get(a) === parents.get(b);
@@ -210,7 +273,7 @@ function textChecks(el: Exclude<Element, { kind: 'connector' } | { kind: 'group'
 function connectorChecks(
   el: Extract<Element, { kind: 'connector' }>,
   add: (c: string, s: Severity, ids: string[], b: Bounds, m: string, e?: Record<string, unknown>) => void,
-  ctx: LayoutContext, byId: ReadonlyMap<string, Element>, parents: ReadonlyMap<string, string>, shown: Element[], pageArea: number,
+  ctx: LayoutContext, byId: ReadonlyMap<string, Element>, parents: ReadonlyMap<string, string>, shown: Element[], pageArea: number, holders: ReadonlyMap<string, string>,
 ): void {
   const box = visualBounds(el);
   const ends: Array<{ side: 'from' | 'to'; ep: typeof el.from }> = [{ side: 'from', ep: el.from }, { side: 'to', ep: el.to }];
@@ -242,6 +305,9 @@ function connectorChecks(
     if (softReported.has(other.id)) continue;
     if (isLaneStructure(other)) continue; // a lane is something a connector runs inside, not a shape in its way
     if (ancestorsOfEnds.has(other.id)) continue;
+    // R17: a connector crosses the edge of a container that holds one of its ends, or the connector itself, to reach inside. A free end
+    // has no element to belong to, so for this judgement only it is held by a container it lies inside.
+    if (isContainer(other) && (holdsEnd(holders, parents, el, other.id) || isInside(holders, el.id, other.id) || freeEndInside(el, other.bounds))) continue;
     const b = visualBounds(other);
     // R23: a shape on a lower level is behind the connector; R26: a frame round one of its ends, or a page-size backdrop, is crossed on purpose
     const intended = passesBehind(other, level) ? 'over' : intendedCrossing(el, other, byId, pageArea);
