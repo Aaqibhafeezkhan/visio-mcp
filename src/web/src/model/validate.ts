@@ -1,5 +1,5 @@
 import { paintProblem } from './paint';
-import type { DiagramDocument, MutationRequest, Operation, RequestEnvelope, ScriptRequest, UndoRequest } from '../contracts/generated';
+import type { DiagramDocument, Element, MutationRequest, Operation, RequestEnvelope, ScriptRequest, UndoRequest } from '../contracts/generated';
 import { fail, ok, type Result } from './result';
 import * as V from './validators.generated.js';
 
@@ -34,6 +34,7 @@ const opValidators = new Map<string, ValidateFn>([
   ['SetAsset', V.SetAsset],
   ['RemoveAsset', V.RemoveAsset],
   ['ReplaceAsset', V.ReplaceAsset],
+  ['Contain', V.Contain],
 ]);
 const opByTag: Record<string, string> = { createShape: 'CreateShape', createText: 'CreateText', createImage: 'CreateImage', createConnector: 'CreateConnector', set: 'Set', move: 'Move', resize: 'Resize', rotate: 'Rotate', delete: 'Delete', registerAsset: 'RegisterAsset', setPage: 'SetPage',
   duplicate: 'Duplicate',
@@ -57,6 +58,7 @@ const opByTag: Record<string, string> = { createShape: 'CreateShape', createText
   setAsset: 'SetAsset',
   removeAsset: 'RemoveAsset',
   replaceAsset: 'ReplaceAsset',
+  contain: 'Contain',
 };
 
 /** A oneOf failure only reports its first branch; validate against the branch the operation names so the error is about the right fields. */
@@ -155,8 +157,36 @@ export function validateDocument(value: unknown): Result<DiagramDocument> {
       }
       if (el.kind === 'group') for (const c of el.childIds) if (!pageElements.has(c)) return fail('invalid_request', `group ${el.id} references unknown child ${c}`);
     }
+    const bad = containerProblem(page.elements);
+    if (bad) return fail('invalid_request', `${bad} (page ${page.name})`);
   }
   return ok(doc);
+}
+
+/** R17: members on the same page, one container each, no cycles, and each container in the same group as its members. */
+function containerProblem(elements: readonly Element[]): string | null {
+  const onPage = new Set(elements.map(e => e.id));
+  const groupOf = new Map<string, string>();
+  for (const e of elements) if (e.kind === 'group') for (const c of e.childIds) groupOf.set(c, e.id);
+  const containerOf = new Map<string, string>();
+  for (const e of elements) {
+    if (e.kind !== 'shape' || !e.container) continue;
+    for (const m of e.container.memberIds) {
+      if (m === e.id) return `container ${e.id} contains itself`;
+      if (!onPage.has(m)) return `container ${e.id} references unknown member ${m}`;
+      if (containerOf.has(m)) return `${m} is a member of two containers`;
+      if (groupOf.get(m) !== groupOf.get(e.id)) return `container ${e.id} and its member ${m} are not in the same group`;
+      containerOf.set(m, e.id);
+    }
+  }
+  for (const id of containerOf.keys()) {
+    const seen = new Set<string>();
+    for (let p = containerOf.get(id); p !== undefined; p = containerOf.get(p)) {
+      if (seen.has(p) || p === id) return `containers contain themselves through ${id}`;
+      seen.add(p);
+    }
+  }
+  return null;
 }
 
 type Creator = { op: string; id?: string; alias?: string };

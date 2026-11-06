@@ -160,7 +160,7 @@ const VALIDATED = [
   'AppPreferences', 'CapturedDocumentDefaults', 'DiagramDocument', 'MutationRequest', 'ScriptRequest', 'UndoRequest', 'RequestEnvelope', 'Operation',
   'CreateShape', 'CreateText', 'CreateImage', 'CreateConnector', 'Set', 'Move', 'Resize', 'Rotate', 'Delete', 'RegisterAsset', 'SetPage',
   'Duplicate', 'Group', 'Ungroup', 'Align', 'Distribute', 'SetGap', 'Reorder', 'AddPage', 'ReorderPage', 'DuplicatePage', 'DeletePage',
-  'AddLayer', 'SetLayer', 'AssignLayers', 'DeleteLayer', 'SetAsset', 'RemoveAsset', 'ReplaceAsset',
+  'AddLayer', 'SetLayer', 'AssignLayers', 'DeleteLayer', 'SetAsset', 'RemoveAsset', 'ReplaceAsset', 'Contain',
 ];
 
 function emitValidators() {

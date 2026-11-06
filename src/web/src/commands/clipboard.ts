@@ -1,17 +1,36 @@
 import type { ConnectorElement, Element, Endpoint, Operation, Page, Snapshot } from '../contracts/generated';
 import { compareElementOrder } from '../model/elementOrder';
+import { isContainer } from '../layout/containers';
+import { leavesUnder } from './groups';
 
 export interface ClipboardData { pageId: string; elements: Element[] }
 
-/** Copies the selected elements. Connectors travel only if both ends are in the selection; others would point outside the copy. */
+/**
+ * Copies the selected elements. Connectors travel only if both ends are in the selection; others would point outside the copy. A container
+ * travels with everything inside it (R17); groups are not copied, so a group inside a container is listed by its leaves instead.
+ */
 export function copyElements(snapshot: Snapshot, ids: string[]): ClipboardData | null {
   const page = snapshot.document.pages.find(p => ids.some(id => p.elements.some(e => e.id === id)));
   if (!page) return null;
+  const byId = new Map(page.elements.map(e => [e.id, e] as const));
   const wanted = new Set(ids);
+  const carry = (id: string) => {
+    for (const leaf of leavesUnder(byId, id)) {
+      if (wanted.has(leaf) && leaf !== id) continue;
+      wanted.add(leaf);
+      const el = byId.get(leaf);
+      if (isContainer(el)) for (const m of el.container.memberIds) carry(m);
+    }
+  };
+  for (const id of ids) if (isContainer(byId.get(id))) carry(id);
   const elements = page.elements.filter(e => wanted.has(e.id) && e.kind !== 'group').filter(e =>
     e.kind !== 'connector' || [e.from, e.to].every(ep => ep.glue === 'none' || (ep.elementId && wanted.has(ep.elementId))))
     .sort(compareElementOrder);
-  return elements.length ? { pageId: page.id, elements: structuredClone(elements) as Element[] } : null;
+  const copied = new Set(elements.map(e => e.id));
+  const clones = (structuredClone(elements) as Element[]).map(e => isContainer(e)
+    ? { ...e, container: { ...e.container, memberIds: e.container.memberIds.flatMap(m => leavesUnder(byId, m)).filter(m => copied.has(m)) } }
+    : e);
+  return clones.length ? { pageId: page.id, elements: clones } : null;
 }
 
 function uniqueAlias(alias: string, taken: Set<string>): string {
@@ -45,6 +64,7 @@ export function pasteOperations(clip: ClipboardData, target: Page, offsetPt: num
       operations.push({
         op: 'createShape', ...base(e), bounds: moved(e), rotationDeg: e.rotationDeg, geometry: { ...e.geometry }, style: { ...e.style },
         ...(e.text ? { text: { ...e.text } } : {}), ...(e.ports ? { ports: e.ports.map(p => ({ ...p })) } : {}),
+        ...(e.container ? { container: { ...(e.container.fit ? { fit: e.container.fit } : {}), ...(e.container.marginPt ? { marginPt: e.container.marginPt } : {}) } } : {}),
       });
     } else if (e.kind === 'text') {
       operations.push({ op: 'createText', ...base(e), bounds: moved(e), rotationDeg: e.rotationDeg, text: { ...e.text } });
@@ -74,6 +94,12 @@ export function pasteOperations(clip: ClipboardData, target: Page, offsetPt: num
       waypoints: c.waypoints.map(p => ({ x: p.x + offsetPt, y: p.y + offsetPt })), style: { ...c.style }, ...(c.label ? { label: { ...c.label } } : {}),
       ...(c.hops ? { hops: c.hops } : {}),
     });
+  }
+  // Membership last, once every member exists: a pasted container holds the copies of its members.
+  for (const e of clip.elements) {
+    if (!isContainer(e)) continue;
+    const add = e.container.memberIds.filter(m => idMap.has(m)).map(m => idMap.get(m)!);
+    if (add.length) operations.push({ op: 'contain', container: idMap.get(e.id)!, add });
   }
   return { operations, newIds: [...idMap.values()] };
 }

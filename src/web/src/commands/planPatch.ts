@@ -8,7 +8,7 @@ import { toPoints } from '../model/validate';
 import { computeArrange, planZ, type ArrangeItem, type ArrangeOp } from './arrange';
 import { emptyDiffBody, type DiffBody } from './diff';
 import {
-  centreOf, isRightAngle, mapConnectorPoints, mapRouting, rotatePoint, rotateRect, scaleRect, translateBounds, visualBounds,
+  centreOf, isRightAngle, mapConnectorPoints, mapRouting, rotatePoint, rotateRect, scaleRect, translateBounds, unionBounds, visualBounds,
   type PointMap,
 } from './geometry';
 import { ancestorsOf, groupBoundsFrom, leavesUnder } from './groups';
@@ -21,6 +21,7 @@ import { planRoutes } from '../layout/routePlanner';
 import { addressOf, moveSegment, readdress, segmentsOf, type RunConstraint } from '../layout/routeSegments';
 import { readDocumentDefaults, textDefaults } from '../model/documentDefaults';
 import { compareElementOrder, effectiveLevel } from '../model/elementOrder';
+import { containerAncestors, containerParents, isContainer, type ContainerShape } from '../layout/containers';
 
 export interface PlanContext {
   newId(): string;
@@ -55,6 +56,8 @@ const DEFAULT_SHAPE_STYLE: ShapeStyle = {
 const DEFAULT_LINE_STYLE: LineStyle = { colour: '#334155', widthPt: 1, dash: 'solid', startArrow: 'none', endArrow: 'block' };
 const SHAPE_ONLY_STYLE = ['fill', 'stroke', 'strokeWidthPt', 'lineCap', 'lineJoin'];
 const LINE_ONLY_STYLE = ['colour', 'widthPt', 'startArrow', 'endArrow', 'startArrowSize', 'endArrowSize'];
+/** R17: the least width or height a container fitted to its members takes. */
+const MIN_FIT_PT = 1;
 
 type PatchObj = Record<string, unknown>;
 type Hit = { page: Page; pageIdx: number; index: number; element: Element };
@@ -89,6 +92,14 @@ function withStoredLevel<T extends Element>(element: T, level: number): T {
   if (level === 0) delete next.level; else next.level = level;
   return next;
 }
+type ContainerData = NonNullable<ShapeElement['container']>;
+/** Container settings in their single stored form: fit "none" and a zero margin are the defaults and are not written. */
+function withContainerSettings(base: ContainerData, patch: { fit?: ContainerData['fit']; marginPt?: number }): ContainerData {
+  const next: ContainerData = { ...base, memberIds: [...base.memberIds] };
+  if (patch.fit !== undefined) { if (patch.fit === 'none') delete next.fit; else next.fit = patch.fit; }
+  if (patch.marginPt !== undefined) { if (patch.marginPt === 0) delete next.marginPt; else next.marginPt = patch.marginPt; }
+  return next;
+}
 
 /** Plans a batch against `doc` without touching it. All-or-nothing: any failure returns an error and no plan. */
 export function planPatch(doc: DiagramDocument, operations: Operation[], ctx: PlanContext): Result<Plan> {
@@ -118,6 +129,8 @@ class Planner {
   private readonly parents = new Map<string, string>();
   /** Elements written by the operation in progress; their ancestor groups get fresh derived bounds afterwards. */
   private touched = new Set<string>();
+  /** Everything written by the batch so far; containers that grow or fit settle around these at the end. */
+  private readonly allTouched = new Set<string>();
   private readonly scopePageId: string | undefined;
 
   constructor(private readonly doc: DiagramDocument, private readonly ctx: PlanContext) {
@@ -214,6 +227,36 @@ class Planner {
     const byId = this.byIdMap(pageIdx);
     this.assertEditable(page, byId.get(rootId)!, what);
     for (const id of this.descendants(byId, rootId)) {
+      const el = byId.get(id)!;
+      if (el.locked || this.layerLocked(page, el)) stop('locked_target', `${id} is locked: ${what} refused`, { target: id });
+    }
+  }
+
+  /**
+   * What moves with an element: the element, everything under it if it is a group and, through containers, every member at every depth
+   * (with everything under those members). `containers` says whether a container with members was among them.
+   */
+  private carried(byId: ReadonlyMap<string, Element>, rootId: string): { ids: Set<string>; containers: boolean } {
+    const ids = new Set<string>();
+    let containers = false;
+    const queue = [rootId];
+    while (queue.length) {
+      const id = queue.pop()!;
+      const el = byId.get(id);
+      if (!el || ids.has(id)) continue;
+      ids.add(id);
+      if (el.kind === 'group') queue.push(...el.childIds);
+      if (isContainer(el) && el.container.memberIds.length) { containers = true; queue.push(...el.container.memberIds); }
+    }
+    return { ids, containers };
+  }
+
+  /** The element and everything that moves with it must be free to change. */
+  private assertCarriedEditable(pageIdx: number, rootId: string, what: string): void {
+    const page = this.pages[pageIdx]!;
+    const byId = this.byIdMap(pageIdx);
+    this.assertEditable(page, byId.get(rootId)!, what);
+    for (const id of this.carried(byId, rootId).ids) {
       const el = byId.get(id)!;
       if (el.locked || this.layerLocked(page, el)) stop('locked_target', `${id} is locked: ${what} refused`, { target: id });
     }
@@ -345,6 +388,7 @@ class Planner {
       try {
         this.apply(op);
         this.refreshGroups();
+        for (const id of this.touched) this.allTouched.add(id);
       } catch (e) {
         // Say which operation failed, so a script can point at the line it came from.
         if (e instanceof Failure && !e.result.ok) e.result.error.details = { ...e.result.error.details, operationIndex: index };
@@ -352,6 +396,7 @@ class Planner {
       }
     }
     this.finalValidate();
+    this.settleContainerFits();
     return this.buildPlan(operations);
   }
 
@@ -381,6 +426,11 @@ class Planner {
       if (!parent || doomed.has(parent)) continue;
       const g = this.findById(parent)!.element as GroupElement;
       this.put({ ...g, childIds: g.childIds.filter(c => !doomed.has(c)) });
+    }
+    // A removed member leaves its container, which is rewritten and so reported. An empty container is still a container.
+    for (const c of this.pages[pageIdx]!.elements) {
+      if (!isContainer(c) || !c.container.memberIds.some(m => doomed.has(m))) continue;
+      this.put({ ...c, container: { ...c.container, memberIds: c.container.memberIds.filter(m => !doomed.has(m)) } });
     }
   }
 
@@ -425,10 +475,78 @@ class Planner {
   }
 
   private translateSubtree(pageIdx: number, rootId: string, dx: number, dy: number): void {
-    this.transformSubtree(pageIdx, rootId, {
-      rect: el => ({ ...el, bounds: translateBounds(el.bounds, dx, dy) }) as RectElement,
-      point: p => ({ x: p.x + dx, y: p.y + dy }),
+    const shift: PointMap = p => ({ x: p.x + dx, y: p.y + dy });
+    const carried = this.carried(this.byIdMap(pageIdx), rootId);
+    if (!carried.containers) {
+      this.transformSubtree(pageIdx, rootId, { rect: el => ({ ...el, bounds: translateBounds(el.bounds, dx, dy) }) as RectElement, point: shift });
+      return;
+    }
+    // R17: a container carries its members at every depth. A connector carried, or glued at both ends to carried elements, moves whole:
+    // its stored route travels with it rather than being planned again.
+    for (const id of carried.ids) {
+      const el = this.findById(id)!.element;
+      if (el.kind !== 'connector' && el.kind !== 'group') this.put({ ...el, bounds: translateBounds(el.bounds, dx, dy) } as Element);
+    }
+    const inside = (c: ConnectorElement) => carried.ids.has(c.id) || (!!c.from.elementId && !!c.to.elementId && carried.ids.has(c.from.elementId) && carried.ids.has(c.to.elementId));
+    for (const el of this.pages[pageIdx]!.elements) {
+      if (el.kind !== 'connector' || !inside(el)) continue;
+      const next = mapConnectorPoints(el, shift);
+      next.bounds = this.connectorBounds(next.from, next.to, next.waypoints);
+      this.put(next);
+    }
+  }
+
+  /** Moves a container's members up into its own container, or to the top level. keepSelf leaves the container listed where it was (disband). */
+  private releaseMembers(c: ContainerShape, keepSelf: boolean): void {
+    const parentId = containerParents(this.findById(c.id)!.page.elements).get(c.id);
+    if (parentId === undefined) return;
+    const p = this.findById(parentId)!.element as ContainerShape;
+    const memberIds = p.container.memberIds.flatMap(m => (m === c.id ? (keepSelf ? [c.id, ...c.container.memberIds] : c.container.memberIds) : [m]));
+    this.put({ ...p, container: { ...p.container, memberIds } });
+  }
+
+  /**
+   * R17: a container created with members goes just behind the lowest of them on its level, so it hides none of them and stays in front of
+   * what lay below them, a page background included. When no stacking value is free there, the smaller side moves apart to make one.
+   */
+  private stackBehindMembers(pageIdx: number, id: string): void {
+    const byId = this.byIdMap(pageIdx);
+    const c = byId.get(id) as ContainerShape;
+    const inside = new Set(c.container.memberIds.flatMap(m => leavesUnder(byId, m)));
+    const peers = this.pages[pageIdx]!.elements.filter(e => e.kind !== 'group' && e.id !== id && effectiveLevel(e) === effectiveLevel(c)).sort(compareElementOrder);
+    const first = peers.findIndex(e => inside.has(e.id));
+    if (first < 0) return; // its members are all on other levels, which decide
+    const below = peers.slice(0, first), above = peers.slice(first);
+    const top = below.length ? below.at(-1)!.zIndex : -Infinity, bottom = above[0]!.zIndex;
+    let z = bottom - 1;
+    if (top >= z) {
+      if (below.length <= above.length) for (const e of below) this.put({ ...e, zIndex: e.zIndex - (top - bottom + 2) });
+      else { for (const e of above) this.put({ ...e, zIndex: e.zIndex + (top - bottom + 2) }); z = top + 1; }
+    }
+    this.put({ ...this.findById(id)!.element, zIndex: z });
+  }
+
+  /** Appends members to a container. An element already in another container moves here; one already here keeps its place. */
+  private addMembers(pageIdx: number, containerId: string, targets: readonly string[]): void {
+    const pageId = this.pages[pageIdx]!.id;
+    const ids = targets.map(t => {
+      const hit = this.resolve(t, pageId);
+      if (hit.pageIdx !== pageIdx) refuse('container_member_other_page', `${hit.element.id} is on another page: a container holds elements on its own page`, { container: containerId, member: hit.element.id });
+      if (hit.element.id === containerId) refuse('container_cycle', 'a container cannot contain itself', { target: containerId });
+      return hit.element.id;
     });
+    if (new Set(ids).size !== ids.length) refuse('duplicate_target', 'the same element is added twice', { container: containerId });
+    const parents = containerParents(this.pages[pageIdx]!.elements);
+    for (const id of ids) {
+      const old = parents.get(id);
+      if (old === undefined || old === containerId) continue;
+      const o = this.findById(old)!.element as ContainerShape;
+      this.assertEditable(this.pages[pageIdx]!, o, 'release a member');
+      this.put({ ...o, container: { ...o.container, memberIds: o.container.memberIds.filter(m => m !== id) } });
+    }
+    const c = this.findById(containerId)!.element as ContainerShape;
+    const fresh = ids.filter(id => !c.container.memberIds.includes(id));
+    if (fresh.length) this.put({ ...c, container: { ...c.container, memberIds: [...c.container.memberIds, ...fresh] } });
   }
 
   private resizeGroup(pageIdx: number, g: GroupElement, patch: Partial<Bounds>): void {
@@ -506,7 +624,9 @@ class Planner {
         this.assertPositive(el.bounds, id);
         this.assertFinite(el.rotationDeg, 'rotationDeg');
         if (el.geometry.svgPath !== undefined) { const parsed = parsePath(el.geometry.svgPath); if (!parsed.ok) stop('invalid_request', parsed.error.message); }
+        if (op.container) el.container = withContainerSettings({ memberIds: [] }, op.container);
         this.addElement(pageIdx, el);
+        if (op.container?.memberIds?.length) { this.addMembers(pageIdx, id, op.container.memberIds); this.stackBehindMembers(pageIdx, id); }
         return;
       }
       case 'createText': {
@@ -582,8 +702,8 @@ class Planner {
         const { page, pageIdx, index, element } = this.resolve(op.target, this.ctx.pageId);
         this.assertFinite(op.delta.xPt, 'delta.xPt'); this.assertFinite(op.delta.yPt, 'delta.yPt');
         const { xPt: dx, yPt: dy } = op.delta;
-        if (element.kind === 'group') {
-          this.assertSubtreeEditable(pageIdx, element.id, 'move');
+        if (element.kind === 'group' || (isContainer(element) && element.container.memberIds.length)) {
+          this.assertCarriedEditable(pageIdx, element.id, 'move');
           return this.translateSubtree(pageIdx, element.id, dx, dy);
         }
         this.assertEditable(page, element, 'move');
@@ -623,6 +743,7 @@ class Planner {
           return this.rotateGroup(pageIdx, element, op.deltaDeg!, op.pivot ? { x: op.pivot.xPt, y: op.pivot.yPt } : undefined);
         }
         this.assertEditable(page, element, 'rotate');
+        if (isContainer(element) && element.container.memberIds.length) refuse('container_rotation', 'a container with members cannot be rotated: rotate its members, or group the container with them and rotate the group', { target: element.id });
         if (op.pivot) return stop('invalid_request', 'pivot applies only to groups');
         const angle = op.angleDeg !== undefined ? op.angleDeg : element.rotationDeg + op.deltaDeg!;
         this.assertFinite(angle, 'rotation');
@@ -664,6 +785,7 @@ class Planner {
         this.assertEditable(hit.page, hit.element, 'ungroup');
         return this.dissolveGroup(hit.element as GroupElement);
       }
+      case 'contain': return this.applyContain(op);
       case 'duplicate': return this.applyDuplicate(op);
       case 'align': case 'distribute': case 'setGap': return this.applyArrange(op);
       case 'reorder': return this.applyReorder(op.targets, op.to);
@@ -761,7 +883,16 @@ class Planner {
     const el = hit.element;
     this.assertEditable(hit.page, el, 'delete');
     if (op.children !== undefined && el.kind !== 'group') refuse('children_only_for_groups', 'children applies only when the target is a group', { target: el.id });
+    if (op.members !== undefined && !isContainer(el)) refuse('members_only_for_containers', 'members applies only when the target is a container', { target: el.id });
     const doomed = new Set<string>([el.id]);
+    if (isContainer(el) && el.container.memberIds.length) {
+      if (!op.members) refuse('container_delete_requires_choice', 'deleting a container with members needs an explicit choice: members "delete" or "keep"', { target: el.id });
+      if (op.members === 'keep') this.releaseMembers(el, false);
+      else {
+        this.assertCarriedEditable(hit.pageIdx, el.id, 'delete');
+        for (const d of this.carried(this.byIdMap(hit.pageIdx), el.id).ids) doomed.add(d);
+      }
+    }
     if (el.kind === 'group') {
       if (!op.children) refuse('group_delete_requires_choice', 'deleting a group needs an explicit choice: children "delete" or "ungroup"', { target: el.id });
       if (op.children === 'ungroup') return this.dissolveGroup(el);
@@ -803,10 +934,33 @@ class Planner {
     for (const c of ids) this.parents.set(c, gid);
   }
 
+  /** Adds members to a container shape (which becomes a container if it was not one) and removes others, which move up a level. */
+  private applyContain(op: Extract<Operation, { op: 'contain' }>): void {
+    const hit = this.resolve(op.container, this.ctx.pageId);
+    const el = hit.element;
+    if (el.kind !== 'shape') refuse('container_must_be_shape', `${el.id} is a ${el.kind}: only a shape can be a container`, { target: el.id });
+    this.assertEditable(hit.page, el, 'change its members');
+    if (!isContainer(el)) this.put({ ...el, container: { memberIds: [] } });
+    if (op.remove) {
+      const ids = op.remove.map(t => this.resolve(t, hit.page.id).element.id);
+      const c = this.findById(el.id)!.element as ContainerShape;
+      for (const id of ids) if (!c.container.memberIds.includes(id)) refuse('not_a_member', `${id} is not a member of container ${c.id}`, { container: c.id, member: id });
+      const both = op.add?.map(t => this.resolve(t, hit.page.id).element.id).find(id => ids.includes(id));
+      if (both) refuse('duplicate_target', `${both} is both added and removed`, { container: c.id, member: both });
+      this.put({ ...c, container: { ...c.container, memberIds: c.container.memberIds.filter(m => !ids.includes(m)) } });
+      const parentId = containerParents(this.pages[hit.pageIdx]!.elements).get(c.id);
+      if (parentId !== undefined) { // a removed member stays inside the container's own container
+        const p = this.findById(parentId)!.element as ContainerShape;
+        this.put({ ...p, container: { ...p.container, memberIds: [...p.container.memberIds, ...ids] } });
+      }
+    }
+    if (op.add) this.addMembers(hit.pageIdx, el.id, op.add);
+  }
+
   private applyArrange(op: ArrangeOp): void {
     const { pageIdx, ids } = this.resolveSet(op.targets);
     const items: ArrangeItem[] = ids.map((id, order) => {
-      this.assertSubtreeEditable(pageIdx, id, op.op);
+      this.assertCarriedEditable(pageIdx, id, op.op);
       const el = this.findById(id)!.element;
       if (el.kind === 'connector' && el.from.glue !== 'none' && el.to.glue !== 'none' && el.waypoints.length === 0) {
         refuse('connector_positioned_by_endpoints', 'a connector glued at both ends is positioned by the shapes it joins', { target: id });
@@ -877,9 +1031,10 @@ class Planner {
     this.assertFinite(dx, 'offset.xPt'); this.assertFinite(dy, 'offset.yPt');
     const byId = this.byIdMap(pageIdx);
 
-    // The set to copy: each target plus everything beneath a group, in the page's own order.
+    // The set to copy: each target plus everything beneath a group or inside a container, in the page's own order.
     const wanted = new Set<string>();
-    for (const id of ids) { wanted.add(id); for (const d of this.descendants(byId, id)) wanted.add(d); }
+    for (const id of ids) for (const d of this.carried(byId, id).ids) wanted.add(d);
+    const homes = containerParents(page.elements);
     const source = page.elements.filter(e => wanted.has(e.id));
     if (op.id !== undefined && ids.length !== 1) refuse('id_needs_single_target', 'id= names one copy, so duplicate exactly one target', { count: ids.length });
     const idMap = new Map(source.map(e => [e.id, this.newElementId(e.id === ids[0] ? op.id : undefined)] as const));
@@ -919,6 +1074,7 @@ class Planner {
           const to = idMap.get(e.attachment.connectorId);
           if (to) copy.attachment = { ...e.attachment, connectorId: to }; else delete copy.attachment;
         }
+        if (isContainer(e)) copy.container = { ...e.container, memberIds: e.container.memberIds.map(m => idMap.get(m)!) };
         if (e.kind === 'connector') {
           copy.from = remapEnd(e.from, e.id);
           copy.to = remapEnd(e.to, e.id);
@@ -931,6 +1087,15 @@ class Planner {
     for (const c of copies) {
       this.addElement(pageIdx, c);
       if (c.kind === 'group') for (const child of c.childIds) this.parents.set(child, c.id);
+    }
+    // A copied member joins its original's container, next to the original, when that container is not copied itself. A copy is never
+    // put into a group, so it joins only a container at the top level.
+    for (const id of ids) {
+      const home = homes.get(id);
+      if (home === undefined || wanted.has(home) || this.parents.has(home)) continue;
+      const c = this.findById(home)!.element as ContainerShape;
+      const memberIds = c.container.memberIds.flatMap(m => (m === id ? [m, idMap.get(id)!] : [m]));
+      this.put({ ...c, container: { ...c.container, memberIds } });
     }
   }
 
@@ -961,6 +1126,7 @@ class Planner {
       if (e.kind === 'group') copy.childIds = e.childIds.map(c => idMap.get(c)!);
       if (e.kind === 'connector') { copy.from = end(e.from); copy.to = end(e.to); }
       if ((e.kind === 'shape' || e.kind === 'text') && e.attachment) copy.attachment = { ...e.attachment, connectorId: idMap.get(e.attachment.connectorId)! };
+      if (isContainer(e)) copy.container = { ...e.container, memberIds: e.container.memberIds.map(m => idMap.get(m)!) };
       return copy as unknown as Element;
     });
     const page: Page = {
@@ -1047,6 +1213,15 @@ class Planner {
           delete next.routing; // waypoints make the route manual (or, when empty, automatic); a stored route no longer applies
           break;
         case 'routing': need(element.kind === 'connector', key); routingMode = (value as { mode: string }).mode; break;
+        case 'container': {
+          need(element.kind === 'shape', key);
+          if (value === null) { // disband: the shape stays, its members move up a level
+            if (isContainer(element)) { this.releaseMembers(element, true); delete next.container; }
+            break;
+          }
+          next.container = withContainerSettings(isContainer(element) ? element.container : { memberIds: [] }, value as { fit?: ContainerData['fit']; marginPt?: number });
+          break;
+        }
         case 'routingPolicy':
           need(element.kind === 'shape' || element.kind === 'text' || element.kind === 'connector', key);
           if (value === null) delete next.routingPolicy; else next.routingPolicy = { ...(('routingPolicy' in element && element.routingPolicy) || {}), ...(value as PatchObj) };
@@ -1234,7 +1409,68 @@ class Planner {
           seen.add(p);
         }
       }
+      this.validateContainers(page, ids);
     }
+  }
+
+  /** R17: members on the container's page, one container each, no cycles, and a container shares its group parent with its members. */
+  private validateContainers(page: Page, ids: ReadonlySet<string>): void {
+    const contained = new Map<string, string>();
+    for (const el of page.elements) {
+      if (!isContainer(el)) continue;
+      for (const m of el.container.memberIds) {
+        if (m === el.id) refuse('container_cycle', `container ${el.id} cannot contain itself`, { target: el.id });
+        if (!ids.has(m)) {
+          if (this.findById(m)) refuse('container_member_other_page', `container ${el.id} lists ${m}, which is on another page`, { container: el.id, member: m });
+          stop('dependency_conflict', `container ${el.id} would lose a member`, { containerIds: [el.id], elementIds: [m] });
+        }
+        const other = contained.get(m);
+        if (other !== undefined) refuse('already_contained', `${m} is a member of two containers`, { target: m, containers: [other, el.id] });
+        contained.set(m, el.id);
+        if (this.parents.get(m) !== this.parents.get(el.id)) {
+          refuse('container_split', `container ${el.id} and its member ${m} must be in the same group, or both in none: group or ungroup them together`, { container: el.id, member: m });
+        }
+      }
+    }
+    for (const id of contained.keys()) {
+      const seen = new Set<string>();
+      for (let p = contained.get(id); p !== undefined; p = contained.get(p)) {
+        if (seen.has(p) || p === id) refuse('container_cycle', 'containers cannot contain themselves, directly or through another container', { target: id });
+        seen.add(p);
+      }
+    }
+  }
+
+  /**
+   * R17: containers that grow or fit settle after the batch around what it changed, innermost first, so a container that grows can make its
+   * own container grow. Explicit resizes come first: a growing container pushed smaller than its members is pushed back out.
+   */
+  private settleContainerFits(): void {
+    this.touched = new Set();
+    for (const page of this.pages) {
+      if (!page.elements.some(e => isContainer(e) && e.container.fit !== undefined)) continue;
+      const parents = containerParents(page.elements);
+      const dirty = new Set<string>();
+      const mark = (id: string) => { dirty.add(id); for (const a of containerAncestors(parents, id)) dirty.add(a); };
+      for (const id of this.allTouched) { mark(id); for (const g of ancestorsOf(this.parents, id)) mark(g); }
+      const depth = (id: string) => containerAncestors(parents, id).length;
+      const order = [...dirty].filter(id => {
+        const el = page.elements.find(e => e.id === id);
+        return isContainer(el) && el.container.fit !== undefined && el.container.memberIds.length > 0;
+      }).sort((a, b) => depth(b) - depth(a));
+      for (const id of order) {
+        const hit = this.findById(id)!;
+        const c = hit.element as ContainerShape;
+        const margin = c.container.marginPt ?? 0;
+        const inner = unionBounds(c.container.memberIds.map(m => visualBounds(this.findById(m)!.element)));
+        // members that are only lines can span no width or height, but a shape needs a positive size: the hug keeps MIN_FIT_PT about its centre
+        const w = Math.max(inner.width + 2 * margin, MIN_FIT_PT), h = Math.max(inner.height + 2 * margin, MIN_FIT_PT);
+        const hug: Bounds = { x: inner.x + inner.width / 2 - w / 2, y: inner.y + inner.height / 2 - h / 2, width: w, height: h };
+        const bounds = c.container.fit === 'fit' ? hug : unionBounds([c.bounds, hug]);
+        if (!sameBounds(bounds, c.bounds)) this.store(hit.pageIdx, hit.index, { ...c, bounds });
+      }
+    }
+    this.refreshGroups();
   }
 
   private buildPlan(operations: Operation[]): Plan {

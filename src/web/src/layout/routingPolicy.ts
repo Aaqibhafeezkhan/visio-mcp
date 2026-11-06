@@ -5,6 +5,7 @@ import type { Rect } from './obstacleRoute';
 import { isLaneStructure } from './swimlane';
 import { BACKGROUND_SHARE, visualRect } from './obstacleGeometry';
 import { effectiveLevel } from '../model/elementOrder';
+import { isContainer } from './containers';
 
 export type EffectiveObstaclePolicy = 'forbidden' | 'avoid' | 'passThrough';
 export interface RoutingObstacle {
@@ -112,6 +113,7 @@ export function selectObstacles(
       continue;
     }
     if (el.kind !== 'shape' || isLaneStructure(el)) continue;
+    if (isContainer(el) && el.container.memberIds.length) continue; // R17: a declared container is passed through, as a guessed one is; R22 owns making this a visible policy
     if (el.style.fill.kind === 'none' && el.style.stroke.kind === 'none') continue;
     legacyCandidates.push({ id: el.id, rect, behind });
   }

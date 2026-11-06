@@ -49,7 +49,7 @@ export function ScriptDrawer({ model }: { model: EditorModel }) {
         {outcome?.ok === false && (
           <p data-testid="script-error" className="bad">{outcome.message}{outcome.hint && <span className="muted"> — {outcome.hint}</span>} <span className="muted small">[{outcome.code}]</span></p>
         )}
-        {!report && !outcome && <p className="muted small">Commands: page, add shape|text|image, connect, group, set, move, resize, rotate, delete, duplicate, align, distribute, set-gap, z, layer, asset. Use level=n on add, connect, or set to control stacking; 0 is the default. Colours are quoted: fill="#FFFFFF".</p>}
+        {!report && !outcome && <p className="muted small">Commands: page, add shape|text|image, connect, group, contain, set, move, resize, rotate, delete, duplicate, align, distribute, set-gap, z, layer, asset. Use level=n on add, connect, or set to control stacking; 0 is the default. Colours are quoted: fill="#FFFFFF".</p>}
       </div>
     </div>
   );

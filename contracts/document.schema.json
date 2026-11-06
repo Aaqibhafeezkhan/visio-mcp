@@ -168,6 +168,15 @@
         "offsetPt": { "type": "number", "minimum": -2000, "maximum": 2000 }
       }
     },
+    "Container": {
+      "type": "object", "additionalProperties": false, "required": ["memberIds"],
+      "description": "R17. Makes a shape a container: its members move with it, are never scaled by its resize, and may be containers themselves. Membership is explicit, not geometric.",
+      "properties": {
+        "memberIds": { "type": "array", "items": { "$ref": "#/$defs/Uuid" }, "uniqueItems": true, "maxItems": 20000, "description": "Direct members, in order. Elements on the same page; each element belongs to at most one container." },
+        "fit": { "enum": ["none", "grow", "fit"], "description": "grow: expand to keep members (plus marginPt) inside; fit: hug the members; absent or none: leave the bounds alone." },
+        "marginPt": { "type": "number", "minimum": 0, "maximum": 500, "description": "Clearance between the members and the container edge used by grow and fit; absent means 0." }
+      }
+    },
     "ShapeGeometry": {
       "type": "object", "additionalProperties": false, "required": [],
       "properties": {
@@ -215,7 +224,8 @@
         "style": { "$ref": "#/$defs/ShapeStyle" },
         "text": { "$ref": "#/$defs/TextBlock" },
         "ports": { "type": "array", "items": { "$ref": "#/$defs/Port" }, "maxItems": 64 },
-        "attachment": { "$ref": "#/$defs/Attachment" }
+        "attachment": { "$ref": "#/$defs/Attachment" },
+        "container": { "$ref": "#/$defs/Container" }
       }
     },
     "TextElement": {

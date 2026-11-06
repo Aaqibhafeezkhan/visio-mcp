@@ -178,6 +178,7 @@ public class ToolTests
         Assert.Contains("UUID", body.GetProperty("guidance").GetProperty("targets").GetString());
         Assert.Contains("level first", body.GetProperty("guidance").GetProperty("editing").GetString());
         Assert.Contains("Group level changes", body.GetProperty("guidance").GetProperty("editing").GetString());
+        Assert.Contains("Membership changes only through contain", body.GetProperty("guidance").GetProperty("editing").GetString());
         Assert.Equal(protocol["$defs"]!["MutationRequest"]!["properties"]!["operations"]!["maxItems"]!.GetValue<int>(), body.GetProperty("limits").GetProperty("maxItems").GetInt32());
         var names = body.GetProperty("operations").EnumerateArray().Select(x => x.GetProperty("operation").GetString()!).ToArray();
         var expected = canonical["$defs"]!["Operation"]!["oneOf"]!.AsArray().Select(r =>

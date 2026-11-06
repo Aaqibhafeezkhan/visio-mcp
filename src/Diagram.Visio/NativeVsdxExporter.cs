@@ -228,6 +228,8 @@ public sealed class NativeVsdxExporter : IVsdxExporter
             readonly List<(string RelId, string Target)> rels = new();
             readonly List<XElement> connects = new();
             readonly Dictionary<string, string> parentOf = new();
+            /// <summary>R17: member id to the container that lists it.</summary>
+            readonly Dictionary<string, string> containerOf = new();
             int nextId = 1;
             int nextRel = 1;
 
@@ -264,6 +266,7 @@ public sealed class NativeVsdxExporter : IVsdxExporter
             {
                 for (var i = 0; i < page.Layers.Count; i++) layerIndex[page.Layers[i].Id] = i;
                 foreach (var g in page.Elements.OfType<GroupElement>()) foreach (var c in g.ChildIds) parentOf[c] = g.Id;
+                foreach (var s in page.Elements.OfType<ShapeElement>()) if (s.Container is { } box) foreach (var m in box.MemberIds) containerOf[m] = s.Id;
                 foreach (var element in page.Elements) ReportRoutingPolicy(element);
 
                 // Visio draws in document order, so shapes go out back to front. A group stacks with its topmost member and draws as a block.
@@ -416,17 +419,49 @@ public sealed class NativeVsdxExporter : IVsdxExporter
             // ------------------------------------------------------------ emission
             XElement? Emit(Element e, Frame frame)
             {
-                var c = Common(e);
-                switch (e)
+                XElement? shape = e switch
                 {
-                    case ConnectorElement con: return Connector(con);
-                    case GroupElement g: return Group(g, frame);
-                    case ImageElement img: return Image(img, frame);
-                    case TextElement t: return TextShape(t, frame);
-                    case ShapeElement s: return Shape(s, frame);
+                    ConnectorElement con => Connector(con),
+                    GroupElement g => Group(g, frame),
+                    ImageElement img => Image(img, frame),
+                    TextElement t => TextShape(t, frame),
+                    ShapeElement s => Shape(s, frame),
+                    _ => null,
+                };
+                if (shape is not null) ContainerRelationships(shape, Common(e).Id!);
+                return shape;
+            }
+
+            /// <summary>
+            /// R17: Visio's own container record, as Visio writes it: the container lists its direct members (DEPENDSON 1) and each member names
+            /// its container (DEPENDSON 4). A nested container carries both. Checked against Visio 16, which reads a master-less shape marked
+            /// User.msvStructureType = "Container" as a container.
+            /// </summary>
+            void ContainerRelationships(XElement shape, string id)
+            {
+                var parts = new List<string>();
+                if (containerOf.TryGetValue(id, out var holder) && shapeIds.TryGetValue(holder, out var h))
+                {
+                    parts.Add($"DEPENDSON(4,Sheet.{h}!SheetRef())");
+                    // Visio may add a member to further containers it lies in; this names the one the editor chose, for the way back
+                    shape.Elements(V + "Section").FirstOrDefault(s => (string?)s.Attribute("N") == "User")?.Add(UserRow("AgentContainer", holder));
                 }
-                _ = c;
-                return null;
+                if (byId[id] is ShapeElement { Container: { } box })
+                {
+                    var refs = box.MemberIds.Where(shapeIds.ContainsKey).Select(m => $"Sheet.{shapeIds[m]}!SheetRef()").ToList();
+                    if (refs.Count > 0) parts.Add($"DEPENDSON(1,{string.Join(',', refs)})");
+                }
+                if (parts.Count > 0) shape.Add(Cell("Relationships", 0, $"SUM({string.Join(',', parts)})"));
+            }
+
+            /// <summary>R17: the user cells that make a shape a Visio container, with Visio's resize rule (0 none, 1 grow, 2 fit) and margin in inches.</summary>
+            static IEnumerable<XElement> ContainerRows(Container box)
+            {
+                yield return UserRow("msvStructureType", "Container");
+                yield return new XElement(V + "Row", new XAttribute("N", "msvSDContainerResize"),
+                    new XElement(V + "Cell", new XAttribute("N", "Value"), new XAttribute("V", box.Fit switch { "grow" => "1", "fit" => "2", _ => "0" })));
+                yield return new XElement(V + "Row", new XAttribute("N", "msvSDContainerMargin"),
+                    new XElement(V + "Cell", new XAttribute("N", "Value"), new XAttribute("V", N((box.MarginPt ?? 0) / PtPerInch)), new XAttribute("U", "IN")));
             }
 
             XElement Group(GroupElement g, Frame frame)
@@ -508,6 +543,7 @@ public sealed class NativeVsdxExporter : IVsdxExporter
                 if (s.Geometry.CornerRadiusPt is { } r) extra.Add(UserRow("AgentCornerRadiusPt", N(r)));
                 if (s.Geometry.SvgPath is { Length: > 0 and <= 30000 } keep) extra.Add(UserRow("AgentSvgPath", keep));
                 if (AttachmentRow(s.Id, s.Attachment) is { } att) extra.Add(att);
+                if (s.Container is { } box) extra.AddRange(ContainerRows(box));
                 shape.Add(UserSection(s, extra.Concat(PortRows(s.Id)).ToArray()));
                 if (GradientSection(s.Style.Fill) is { } gradient) shape.Add(gradient);
                 shape.Add(GeometrySections(geo, s.Bounds, s.Hidden));
