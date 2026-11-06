@@ -115,7 +115,12 @@ describe('contract validation', () => {
       // used to throw `TypeError: v is not a function` for an unregistered operation (#91).
       const r = validateMutationRequest({ ...validBatch(), operations: [{ op: tag, probe: true }] });
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.error.code).toBe('invalid_request');
+      if (!r.ok) {
+        expect(r.error.code).toBe('invalid_request');
+        // A missing opByTag entry also returns invalid_request, but about the op tag itself (keyword 'enum',
+        // "not a known operation"). A registered tag reports a problem inside the branch instead.
+        expect(r.error.details).not.toMatchObject({ path: '/operations/0/op', keyword: 'enum' });
+      }
     }
   });
 
