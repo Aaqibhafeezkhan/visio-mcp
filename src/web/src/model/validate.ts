@@ -34,6 +34,9 @@ const opValidators = new Map<string, ValidateFn>([
   ['SetAsset', V.SetAsset],
   ['RemoveAsset', V.RemoveAsset],
   ['ReplaceAsset', V.ReplaceAsset],
+  ['Reroute', V.Reroute],
+  ['MoveSegment', V.MoveSegment],
+  ['PinSegment', V.PinSegment],
   ['Contain', V.Contain],
 ]);
 const opByTag: Record<string, string> = { createShape: 'CreateShape', createText: 'CreateText', createImage: 'CreateImage', createConnector: 'CreateConnector', set: 'Set', move: 'Move', resize: 'Resize', rotate: 'Rotate', delete: 'Delete', registerAsset: 'RegisterAsset', setPage: 'SetPage',
