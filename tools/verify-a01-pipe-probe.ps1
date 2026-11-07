@@ -32,6 +32,7 @@ $cases = @(
     @{ Label = 'error reply (unsupported_version)'; Why = 'unsupported_version'; Want = 'INCONCLUSIVE'; Act = { param($p) Send-Frame $p (Json '{"protocolVersion":1,"kind":"response","requestId":"a01-probe","error":{"code":"unsupported_version","message":"protocol 1 is not supported"}}') } }
     @{ Label = 'reply for a different request id'; Why = 'not a recognised'; Want = 'INCONCLUSIVE'; Act = { param($p) Send-Frame $p (Json ($using:okReply -replace 'a01-probe', 'other')) } }
     @{ Label = 'server never answers (deadline 600 ms)'; Why = 'timed out waiting for the reply header'; Want = 'INCONCLUSIVE'; Act = { param($p) Start-Sleep -Seconds 8 }; Max = 3000 }
+    @{ Label = 'reply dripped past the total deadline (600 ms)'; Why = 'timed out waiting for the reply body'; Want = 'INCONCLUSIVE'; Act = { param($p) Send-Frame $p (Json $okReply) -chunk 1 }; Max = 1500 }
     @{ Label = 'server stalls after half a frame (deadline 600 ms)'; Why = 'timed out waiting for the reply body'; Want = 'INCONCLUSIVE'; Act = { param($p) $p.Write([byte[]] (50, 0, 0, 0, 123), 0, 5); $p.Flush(); Start-Sleep -Seconds 8 }; Max = 3000 }
 )
 
@@ -76,6 +77,21 @@ foreach ($case in $cases) {
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $outcome = Invoke-A01PipeProbe "a01-verify-$PID-missing" 600
 Check 'pipe does not exist (deadline 600 ms)' 'INCONCLUSIVE' $outcome 3000 ([int] $clock.ElapsedMilliseconds) 'no connection within'
+
+# After the total deadline nothing counts as in time, even a task that has already finished (an expired deadline was once clamped to 1 ms).
+$done = [System.Threading.Tasks.Task]::CompletedTask
+$clock = [System.Diagnostics.Stopwatch]::StartNew()
+$inTime = Wait-A01Task $done $clock 5000
+Start-Sleep -Milliseconds 120
+$late = Wait-A01Task $done $clock 100
+Check 'finished task counts before the deadline, not after it' 'INCONCLUSIVE' ([pscustomobject]@{ Result = $(if ($inTime -and -not $late) { 'INCONCLUSIVE' } else { 'ACCEPTED' }); Detail = '' }) 0 0
+
+# -TimeoutMs must be positive: -1 would make Connect wait forever.
+foreach ($bad in 0, -1) {
+    $rejected = $false
+    try { Invoke-A01PipeProbe 'a01-verify-never-used' $bad | Out-Null } catch { $rejected = $true }
+    Check "TimeoutMs $bad is rejected" 'INCONCLUSIVE' ([pscustomobject]@{ Result = $(if ($rejected) { 'INCONCLUSIVE' } else { 'ACCEPTED' }); Detail = '' }) 0 0
+}
 
 # The REFUSED branch needs a real UnauthorizedAccessException, which Windows raises from Connect on an ACL denial and Linux does not
 # for a pipe. Feed the classifier one captured the way PowerShell delivers it (wrapped by a .NET method call). Simulated.

@@ -16,7 +16,7 @@ Framing follows src/Diagram.Ipc/FrameCodec.cs: 4-byte little-endian length, then
 #>
 param(
     [string] $PipeName,
-    [int] $TimeoutMs = 5000
+    [ValidateRange(1, 600000)] [int] $TimeoutMs = 5000
 )
 
 # Maps an exception from Connect to a result. PowerShell wraps exceptions from .NET method calls, so look through the inner exceptions.
@@ -27,10 +27,16 @@ function ConvertFrom-A01ConnectError([System.Exception] $e, [int] $TimeoutMs) {
     [pscustomobject]@{ Result = 'INCONCLUSIVE'; Detail = "connect failed: $($e.GetType().Name): $($e.Message)" }
 }
 
-function Invoke-A01PipeProbe([string] $PipeName, [int] $TimeoutMs) {
+# True only if the task finishes before the whole-probe deadline. Once the deadline has passed nothing is waited for, not even a task
+# that has already finished, so a reply trickling in cannot extend the probe.
+function Wait-A01Task([System.Threading.Tasks.Task] $task, [System.Diagnostics.Stopwatch] $clock, [int] $TimeoutMs) {
+    $ms = $TimeoutMs - [int] $clock.ElapsedMilliseconds
+    ($ms -gt 0) -and $task.Wait($ms)
+}
+
+function Invoke-A01PipeProbe([string] $PipeName, [ValidateRange(1, 600000)] [int] $TimeoutMs) {
     $result = { param($r, $d) [pscustomobject]@{ Result = $r; Detail = $d } }
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    $left = { [Math]::Max(1, $TimeoutMs - [int] $clock.ElapsedMilliseconds) }
     # Asynchronous so Dispose cannot block behind a read that never returns.
     $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
     try {
@@ -41,7 +47,7 @@ function Invoke-A01PipeProbe([string] $PipeName, [int] $TimeoutMs) {
         $len = $hello.Length
         $frame = [byte[]] (@(($len -band 255), (($len -shr 8) -band 255), (($len -shr 16) -band 255), (($len -shr 24) -band 255)) + $hello)
         $write = $client.WriteAsync($frame, 0, $frame.Length)
-        if (-not $write.Wait((& $left))) { return & $result 'INCONCLUSIVE' 'timed out sending app.hello.' }
+        if (-not (Wait-A01Task $write $clock $TimeoutMs)) { return & $result 'INCONCLUSIVE' 'timed out sending app.hello.' }
 
         # Read exactly $count bytes within the remaining deadline; $null on timeout, a short array on EOF.
         $readExactly = {
@@ -50,7 +56,7 @@ function Invoke-A01PipeProbe([string] $PipeName, [int] $TimeoutMs) {
             $got = 0
             while ($got -lt $count) {
                 $task = $client.ReadAsync($buffer, $got, $count - $got)
-                if (-not $task.Wait((& $left))) { return $null }
+                if (-not (Wait-A01Task $task $clock $TimeoutMs)) { return $null }
                 if ($task.Result -eq 0) { break }
                 $got += $task.Result
             }

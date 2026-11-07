@@ -16,7 +16,7 @@ The existing `Diagram.Ipc.Tests.PeerTests.SameUserSessionOnly` test verifies the
 - Two distinct local or domain Windows accounts, referred to as **User A** and **User B**.
 - Permission to sign in as both accounts. Do not share passwords or other credentials.
 - The application is launched and remains running in User A's interactive session.
-- This repository's `tools/probe-a01-pipe-access.ps1`, copied to both users' Windows sessions (any folder both can read). It is written for Windows PowerShell 5.1 (`powershell.exe`) and PowerShell 7 (`pwsh.exe`); so far it has run only under PowerShell 7.6.9 on Linux, so note which one you use. It needs no other install and does not change the application.
+- This repository's `tools/probe-a01-pipe-access.ps1`, placed where both users can read it (this checkout, or a copy in a shared folder such as `C:\Users\Public\A01`). Commands below use `<path to>` for that folder; run them with the script's full path, so the current directory does not matter. If PowerShell's execution policy blocks the script, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<path to>\probe-a01-pipe-access.ps1' -PipeName '...'` and record that. It is written for Windows PowerShell 5.1 (`powershell.exe`) and PowerShell 7 (`pwsh.exe`); so far it has run only under PowerShell 7.6.9 on Linux, so note which one you use. It needs no other install and does not change the application.
 - Optional extra control: the configured MCP client can call the public `get_document_summary` tool (the harmless read-only tool; `doc.summary` is the internal bridge method behind it, not a tool name).
 
 ## Procedure
@@ -54,7 +54,7 @@ Copy the exact pipe name for the test. It contains the owner SID and logon-sessi
 While still signed in as User A, run the exact probe you will give User B, against the exact pipe name from step 2:
 
 ```powershell
-.\tools\probe-a01-pipe-access.ps1 -PipeName '<exact pipe name from step 2>'
+& '<path to>\probe-a01-pipe-access.ps1' -PipeName '<exact pipe name from step 2>'
 ```
 
 The expected output is `RESULT: ACCEPTED - app.hello succeeded ...` and exit code 0. Record the output and the time. If it is anything else, stop: the User B result means nothing until this probe succeeds as User A. Do not substitute a different tool for this control; User B must run the same script against the same name.
@@ -76,7 +76,7 @@ whoami /logonid
 Confirm that User B's SID differs from User A's SID. Run the same probe with the same pipe name:
 
 ```powershell
-.\tools\probe-a01-pipe-access.ps1 -PipeName '<exact pipe name from step 2>'
+& '<path to>\probe-a01-pipe-access.ps1' -PipeName '<exact pipe name from step 2>'
 ```
 
 The probe sends `app.hello` only, never a document operation. It waits at most 5 seconds in total (`-TimeoutMs` changes that), reads whole frames, prints one `RESULT:` line and exits 0, 10 or 20:
