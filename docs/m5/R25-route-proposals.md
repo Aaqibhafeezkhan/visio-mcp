@@ -40,7 +40,7 @@ All runs on Linux with Node 24.18.0 and .NET 10.0.403, from the worktree at the 
 | Test | What it shows |
 |---|---|
 | `src/web/tests/routeModes.test.ts` (one new) | Reroute with UUID targets on a two-page document needs no page. Unknown UUID and unknown page give `not_found`; an alias without page scope, and an untargeted reroute without a page, are still refused; frozen and locked targets are still refused. |
-| `src/web/tests/routeProposals.test.ts` (21) | Committed state, history, cache, status, events and live ids are unchanged after successful, refused and failed proposals. Proposed points equal the stored route after applying `commit` through the bridge without a page scope: a detour, page scope with unchanged targets, joined branches included, a second page, a page mixing stored and unstored routes, and the Lego fixture page. Also: stale commit (`revision_conflict`), one undo, retry deduplication, both `dependency_conflict` cases, `join_not_followed`, the five projection failure modes, planner-only pages without a projector, unresolved targets and pinned runs (evidence, no commit), unchanged geometry and pages with nothing eligible (no commit), current geometry of unstored routes from the projection, isolation with a control, input refusals, a stale session or another document refused as `doc.snapshot` refuses it, mixed and wrong pages, ordering behind a mutation, determinism. |
+| `src/web/tests/routeProposals.test.ts` (22) | Committed state, history, cache, status, events and live ids are unchanged after successful, refused and failed proposals. Proposed points equal the stored route after applying `commit` through the bridge without a page scope: a detour, page scope with unchanged targets, joined branches included, a second page, a page mixing stored and unstored routes, and the Lego fixture page. Also: stale commit (`revision_conflict`), one undo, retry deduplication, both `dependency_conflict` cases, `join_not_followed`, the five projection failure modes, planner-only pages without a projector, unresolved targets and pinned runs (evidence, no commit), unchanged geometry and pages with nothing eligible (no commit), current geometry of unstored routes from the projection, isolation with a control, input refusals, a stale session or another document refused as `doc.snapshot` refuses it, mixed and wrong pages, ordering behind a mutation, determinism. |
 | `src/web/tests/browser/route-proposals.spec.ts` (2) | On the real hidden projector: a page-scope proposal over a connector with no stored route next to an attached label leaves the projection and `get_objects` diagnostics unchanged, and the committed drawing equals the proposed points. A joined trunk is refused rather than offered a commit that detaches the branch. |
 | `tests/Diagram.Mcp.Tests/ToolTests.cs` (two new, list updated) | `propose_routes` forwards `connectorIds` and `pageId` as a read without a transaction; a malformed `pageId` is refused before sending; `apply_operations` sends no page scope. |
 
@@ -55,7 +55,9 @@ Results are in the "Recorded results" section below.
 - **Older documents with unstored routes on several pages.** Any transaction gives every unstored automatic connector a stored route, on every page. A proposal on one page then reports `dependency_conflict` for connectors on the other pages, and including them isn't possible because a selection stays on one page. Any ordinary edit on such a document stores those routes, after which proposals work as usual.
 - **NOT RUN:** Windows, WebView2, a live MCP client, Visio and Word, and a person's review of the tool on screen.
 
-## Recorded results
+## Recorded results (historical, before integration with main)
+
+These were recorded on the feature branch at 8c3abe8/05af2f5, on main 81a1a80. They are not re-measured on the integrated head; see the next section for that.
 
 - **Web unit** (`src/web`, branch head): `npx vitest run` gave 69 files, 685/685 (main 663, plus 1 for the prerequisite, plus 21). `npm run typecheck`, `npm run generate:check` and `npm run build` exit 0.
 - **.NET** (8c3abe8, locked restore): `dotnet test tests/Diagram.Mcp.Tests` 16/16 (main 14, plus 2); `dotnet test tests/Diagram.Contracts.Tests` 50/50. The rest of the portable solution was not changed by this slice. On Linux it has 22 known failures on main (Host 20, Ipc 2) that assert Windows behaviour.
@@ -66,3 +68,13 @@ Results are in the "Recorded results" section below.
 - **The tests catch what they claim** (each mutant was reverted afterwards):
   - With `SnapshotProjector.isolate` reduced to `run()`, the first browser test fails at the projection comparison; restored, it passes.
   - With the scope check removed from `previewRoutes`, the stale-scope unit test fails.
+
+## Integration with main 9d00f6f (fresh, Linux)
+
+Feature head 05af2f5 merged with origin/main 9d00f6f (H04, R17 containers, H03 validators) by a merge commit, with no conflicts and no change to feature commits. Merge commit 9d50e2e; the head also holds one test-only commit adding the container interaction test and this section. The proposal planner and `previewRoutes` needed no change: container settlement runs inside the shared `planPatch` chain that both the preview and the commit use.
+
+- **New test** (`routeProposals.test.ts`, 22nd): with a fitting container around the joined shapes, a proposal leaves committed state untouched, the committed route equals the proposed route, the container is unchanged, and one undo restores the detour.
+- **Web unit:** `npx vitest run` 73 files, 723/723 at the merge; 22/22 in `routeProposals.test.ts` with the new test. `npm run typecheck`, `npm run generate:check` and `npm run build` exit 0.
+- **Browser** (focused, config copy on another port): `route-proposals`, `containers`, `arrange`, `routing-levels`, `routing-policy`, `route-diagnostics`: 17/17 passed, including `arrange.spec.ts:113`. The full browser suite was not rerun.
+- **.NET** (portable check, `portable-check.sh`): Mcp 16/16, Contracts 50/50, Visio 178/178; Host 20 and Ipc 2 failures equal the Linux baseline of 22, so there are no new failures. Windows verification of those 22 is NOT RUN.
+- **NOT RUN:** Windows, WebView2, a live MCP client, Visio and Word, the full browser suite, and manual acceptance. This slice does not cover Beautify quality, strict `moveSegment` or full native acceptance; R25 stays open.

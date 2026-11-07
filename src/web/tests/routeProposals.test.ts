@@ -154,6 +154,29 @@ describe('route proposals (R25)', () => {
     expect(canonicalSerialize(h.doc().pages)).toBe(pre);
   });
 
+  it('with a fitting container around the joined shapes, the proposal leaves it alone and the commit stores the proposed route (R17)', async () => {
+    const { t, h, events } = await scene();
+    const ab = h.conn('ab');
+    const cid = uuid(900);
+    await h.run([{ op: 'createShape', id: cid, bounds: box(-20, 80, 840, 100), container: { memberIds: [h.find('a').id, h.find('b').id], fit: 'fit', marginPt: 20 } }]);
+    const containerBefore = canonicalSerialize(h.find(cid));
+    const before = observe(t, events);
+
+    const proposal = await h.mustPropose({ connectorIds: [ab.id] });
+    expect(observe(t, events)).toBe(before);
+    const route = proposal.routes[0]!;
+    expect(route.geometryChanged).toBe(true);
+    expect(proposal.commit).toBeDefined();
+
+    await h.mustApply(proposal.commit!);
+    expect(h.conn('ab').routing!.advisory).toEqual(route.points);
+    expect(canonicalSerialize(h.find(cid))).toBe(containerBefore);
+
+    const undo = await t.engine.undo({ ...t.scope(), transactionId: uuid(7779), baseRevision: t.engine.revision });
+    expect(undo.ok).toBe(true);
+    expect(h.conn('ab').routing!.advisory!.length).toBeGreaterThan(2);
+  });
+
   it('a commit made stale by another edit is refused with revision_conflict', async () => {
     const { h } = await scene();
     const proposal = await h.mustPropose({ connectorIds: [h.conn('ab').id] });
