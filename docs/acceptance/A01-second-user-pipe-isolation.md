@@ -16,7 +16,8 @@ The existing `Diagram.Ipc.Tests.PeerTests.SameUserSessionOnly` test verifies the
 - Two distinct local or domain Windows accounts, referred to as **User A** and **User B**.
 - Permission to sign in as both accounts. Do not share passwords or other credentials.
 - The application is launched and remains running in User A's interactive session.
-- A harmless MCP operation is available for the same-user control, such as `doc.summary`.
+- This repository's `tools/probe-a01-pipe-access.ps1`, copied to both users' Windows sessions (any folder both can read). It is written for Windows PowerShell 5.1 (`powershell.exe`) and PowerShell 7 (`pwsh.exe`); so far it has run only under PowerShell 7.6.9 on Linux, so note which one you use. It needs no other install and does not change the application.
+- Optional extra control: the configured MCP client can call the public `get_document_summary` tool (the harmless read-only tool; `doc.summary` is the internal bridge method behind it, not a tool name).
 
 ## Procedure
 
@@ -50,13 +51,19 @@ Copy the exact pipe name for the test. It contains the owner SID and logon-sessi
 
 ### 3. Run the same-user success control
 
-While still signed in as User A, use the configured MCP client to call the harmless `doc.summary` operation against the running application.
+While still signed in as User A, run the exact probe you will give User B, against the exact pipe name from step 2:
 
-Record the client identity, operation, timestamp and outcome. The expected result is a successful response. If this control fails, stop: the cross-user result is inconclusive until the normal connection works.
+```powershell
+.\tools\probe-a01-pipe-access.ps1 -PipeName '<exact pipe name from step 2>'
+```
+
+The expected output is `RESULT: ACCEPTED - app.hello succeeded ...` and exit code 0. Record the output and the time. If it is anything else, stop: the User B result means nothing until this probe succeeds as User A. Do not substitute a different tool for this control; User B must run the same script against the same name.
+
+Optionally also call `get_document_summary` from the configured MCP client and record the client, time and outcome.
 
 ### 4. Attempt access as User B
 
-Sign out of User A or switch to User B without stopping the application in User A's session. Open PowerShell as User B.
+Switch to User B **without signing out of User A**: use Windows **Switch user** (Start menu, account picture, then User B), or Win+L and then choose User B. Signing out of User A closes the application you are testing. Open PowerShell as User B in that second session.
 
 Record:
 
@@ -66,93 +73,28 @@ whoami /user
 whoami /logonid
 ```
 
-Confirm that User B's SID differs from User A's SID. Use the exact pipe name copied in step 2 and run this probe. It sends the protocol handshake only; it does not issue a document operation.
+Confirm that User B's SID differs from User A's SID. Run the same probe with the same pipe name:
 
 ```powershell
-param(
-    [Parameter(Mandatory = $true)]
-    [string] $PipeName
-)
-
-$client = [System.IO.Pipes.NamedPipeClientStream]::new(
-    '.',
-    $PipeName,
-    [System.IO.Pipes.PipeDirection]::InOut
-)
-
-try {
-    $client.Connect(3000)
-
-    $hello = [System.Text.Encoding]::UTF8.GetBytes(
-        '{"protocolVersion":1,"kind":"request","requestId":"a01-probe","method":"app.hello","params":{"protocolVersion":1,"clientLabel":"A01-cross-user-probe"}}'
-    )
-
-    $header = [System.BitConverter]::GetBytes([uint32] $hello.Length)
-    $client.Write($header, 0, $header.Length)
-    $client.Write($hello, 0, $hello.Length)
-    $client.Flush()
-
-    $replyHeader = New-Object byte[] 4
-    $read = $client.Read($replyHeader, 0, 4)
-
-    if ($read -eq 0) {
-        'REFUSED: server closed the connection before accepting the handshake.'
-    }
-    elseif ($read -ne 4) {
-        'INCONCLUSIVE: received a partial frame header.'
-    }
-    else {
-        $length = [System.BitConverter]::ToUInt32($replyHeader, 0)
-        if ($length -gt 32768) {
-            'INCONCLUSIVE: unexpected oversized handshake response.'
-        }
-        else {
-            $payload = New-Object byte[] ([int] $length)
-            $offset = 0
-            while ($offset -lt $payload.Length) {
-                $count = $client.Read($payload, $offset, $payload.Length - $offset)
-                if ($count -eq 0) { break }
-                $offset += $count
-            }
-
-            if ($offset -eq 0) {
-                'REFUSED: server closed the connection without a handshake response.'
-            }
-            else {
-                $response = [System.Text.Encoding]::UTF8.GetString($payload, 0, $offset)
-                "RESPONSE: $response"
-            }
-        }
-    }
-}
-catch [System.UnauthorizedAccessException] {
-    'REFUSED: Windows denied access to the named pipe.'
-}
-catch [System.IO.IOException] {
-    "REFUSED: named-pipe connection failed: $($_.Exception.Message)"
-}
-catch {
-    "INCONCLUSIVE: unexpected probe error: $($_.Exception.GetType().FullName)"
-}
-finally {
-    $client.Dispose()
-}
+.\tools\probe-a01-pipe-access.ps1 -PipeName '<exact pipe name from step 2>'
 ```
 
-Example invocation:
+The probe sends `app.hello` only, never a document operation. It waits at most 5 seconds in total (`-TimeoutMs` changes that), reads whole frames, prints one `RESULT:` line and exits 0, 10 or 20:
 
-```powershell
-.\Test-A01-PipeAccess.ps1 -PipeName 'agentic-diagram.v1.<owner-SID>.<logon-session-LUID>'
-```
+| Result | Exit | Meaning |
+|---|---|---|
+| `ACCEPTED` | 0 | The server returned a successful `app.hello` response (`kind` `response`, matching `requestId`, `result.protocolVersion` 1, a `connectionId`). |
+| `REFUSED` | 10 | Windows itself denied the connection (`UnauthorizedAccessException` from `Connect`). Only this is demonstrated identity denial. |
+| `INCONCLUSIVE` | 20 | Anything else: timeout, pipe missing or busy, the server closing without a reply, a partial or malformed frame, an error reply, or any other I/O error. |
 
-For a one-off run, save the script above as `Test-A01-PipeAccess.ps1` before invoking it. Do not paste passwords or credentials into the script or issue evidence.
+The application also closes a connection without a reply when the peer's SID or logon session differs (`PipeServer.PeerIsSameUserAndSession`), and the pipe is created current-user-only. A silent close looks the same as a crash or a restart, so the probe reports it as `INCONCLUSIVE`, not `REFUSED`.
 
-Expected result for User B: Windows denies the connection, or the application closes the connection before returning a successful `app.hello` handshake. A successful handshake is a failure of this acceptance check and must be investigated.
+Expected result for User B: `REFUSED`. `INCONCLUSIVE` does not pass or fail the check: rerun it, then diagnose (is the application still running as User A; does the User A probe still succeed; is this the same pipe name). `ACCEPTED` for User B is a failure of this acceptance check and must be investigated.
 
 ### 5. Repeat and preserve evidence
 
 - Repeat the User B attempt once to rule out a transient result.
-- Return to User A and repeat the same-user control while the same application instance is still running.
+- Switch back to User A and run the same probe again while the same application instance is still running. It must still print `ACCEPTED`: a User B attempt must not have broken the owner's access.
 - Record timestamps and the exact output for both attempts.
 - Capture screenshots or sanitized console output if useful. Redact machine names or account details if they are sensitive; retain enough information to distinguish the two SIDs.
 - Do not record passwords, tokens, or other credentials.
@@ -172,18 +114,25 @@ Fill this table only after the checks have actually been performed.
 | Application version and executable path | NOT RUN |
 | MCP shim version and executable/assembly path | NOT RUN |
 | Pipe name used | NOT RUN |
-| User A same-user control | NOT RUN |
+| User A probe before User B (exact output) | NOT RUN |
 | User B first attempt | NOT RUN |
 | User B repeat attempt | NOT RUN |
+| User A probe after User B (exact output) | NOT RUN |
 | Evidence location | None collected |
 
 ## Current status
 
-**NOT RUN.** This contribution prepares the repeatable procedure, but no second Windows account or Windows desktop session was available in the implementation environment. No cross-user refusal or same-user success is claimed. The acceptance check remains open until a person runs the procedure on Windows and records the actual identities, versions and observations above.
+**NOT RUN.** No second Windows account or Windows desktop session was available in the implementation environment. No cross-user refusal or same-user success on Windows is claimed. The acceptance check (issue [#99](https://github.com/rp2839/visio-mcp/issues/99)) stays open until a person runs the procedure on Windows and records the actual identities, versions and observations above.
+
+### Probe verification (simulated, not Windows evidence)
+
+`tools/verify-a01-pipe-probe.ps1` runs the probe against scripted fake pipe servers and checks its classification: a reply sent in small pieces is `ACCEPTED`; no reply, a cut-short header or body, a zero-length or oversized frame, invalid JSON, an error reply, a reply for another request, a server that stalls (deadline), and a missing pipe are all `INCONCLUSIVE`; a wrapped `UnauthorizedAccessException` is `REFUSED` and other connect errors are not. Run it with `pwsh -File tools/verify-a01-pipe-probe.ps1`. It cannot test Windows ACL behaviour.
 
 ## Related evidence
 
-- [A01 issue](https://github.com/rp2839/visio-mcp/issues/14)
+- [A01 issue #14](https://github.com/rp2839/visio-mcp/issues/14) (closed, documentation delivery) and [#99](https://github.com/rp2839/visio-mcp/issues/99) (outstanding acceptance)
+- [Probe script](../../tools/probe-a01-pipe-access.ps1) and its [simulated verification](../../tools/verify-a01-pipe-probe.ps1)
+- [Frame codec](../../src/Diagram.Ipc/FrameCodec.cs): 4-byte little-endian length, then UTF-8 JSON
 - [M0 results](../m0/results.md), which records the original second-user check as NOT RUN
 - [IPC peer tests](../../tests/Diagram.Ipc.Tests/PeerTests.cs), including the same-user ACL/session control
 - [Pipe server](../../src/Diagram.Ipc/PipeServer.cs), which applies the current-user-only pipe option and validates peer identity
