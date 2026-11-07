@@ -14,7 +14,10 @@ const initialPreferences = await initializePreferences(window.chrome?.webview);
 const app = startAgentApp(window.chrome?.webview, {
   ...initialPreferences,
   render: renderer.render, rasterise: renderer.rasterise, layoutContext: createBrowserLayoutContext(assetUrl as never),
-  configureEngine: engine => { engine.setSnapshotProjector(createSnapshotProjector((snapshot, id) => assetUrl(snapshot as never, id)).project); },
+  configureEngine: engine => {
+    const projector = createSnapshotProjector((snapshot, id) => assetUrl(snapshot as never, id));
+    engine.setSnapshotProjector(projector.project, projector.isolate);
+  },
 });
 (window as unknown as { __agent?: unknown }).__agent = import.meta.env.VITE_TEST_API === '1' ? app : undefined;
 document.title = 'Diagram (background)';

@@ -57,6 +57,13 @@ replace them with actual identities and approved assets. Use `resize` for bounds
 `move` for position and `set` for text/style patches. Prefer UUID targets on multipage
 documents. See `contracts/fixtures/operation-examples.json` for the validated examples.
 
+To straighten or tidy connectors, call `propose_routes` with `connectorIds` (or a
+`pageId` for the whole page) first. It changes nothing and returns each route's points
+in page points, whether the drawing would change, and route findings. When it returns
+`commit`, apply `commit.operations` unchanged with `apply_operations` at
+`commit.baseRevision` and a new `transactionId`. `dependency_conflict` names other
+connectors the reroute would change. See [R25](docs/m5/R25-route-proposals.md).
+
 For existing labels, call `get_text_layout` with `documentId`, `sessionId` and `ids`.
 It returns measurements and suggested operations without changing the document.
 Choose `strategy: "grow_box"` to preserve font size or `"shrink_font"` to preserve

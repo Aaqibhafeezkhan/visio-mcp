@@ -219,6 +219,36 @@ describe('route modes (R20)', () => {
     expect(canonicalSerialize(s.doc().pages)).toBe(before);
   });
 
+  it('reroute with UUID targets needs no page scope on a multipage document; other targeting keeps its rules (R25)', async () => {
+    const s = await setup([{ op: 'createShape', alias: 'wall', bounds: box(330, 122, 40, 16) }]);
+    await s.ok([{ op: 'addPage', id: '00000000-0000-4000-8000-0000000000f2', name: 'Second' }, { op: 'delete', target: 'wall' }]);
+    const ab = s.conn('ab'), cd = s.conn('cd');
+    const before = ab.routing!.advisory!;
+    expect(before.length).toBeGreaterThan(2); // the detour is kept after the wall goes: only an explicit reroute straightens it
+
+    const rerouted = await s.run([{ op: 'reroute', targets: [ab.id] }]);
+    expect(rerouted.ok, JSON.stringify(!rerouted.ok && rerouted.error)).toBe(true);
+    expect(s.conn('ab').routing!.advisory!.length).toBe(2);
+    expect(s.conn('cd')).toEqual(cd);
+
+    const code = async (ops: object[], pageId?: string) => {
+      const r = await s.t.engine.execute(s.t.request(ops as Operation[], pageId ? { pageId } : {}), 'mcp');
+      return r.ok ? 'ok' : r.error.code;
+    };
+    expect(await code([{ op: 'reroute', targets: ['00000000-0000-4000-8000-0000000000ee'] }])).toBe('not_found');
+    expect(await code([{ op: 'reroute', targets: [ab.id] }], '00000000-0000-4000-8000-0000000000ef')).toBe('not_found');
+    expect(await code([{ op: 'reroute', targets: ['ab'] }])).toBe('invalid_request'); // an alias still needs a page
+    expect(await code([{ op: 'reroute', targets: ['ab'] }], s.page)).toBe('ok');
+    expect(await code([{ op: 'reroute' }])).toBe('invalid_request'); // no targets: which page is still asked
+    expect(await code([{ op: 'reroute' }], s.page)).toBe('ok');
+
+    await s.ok([{ op: 'set', target: cd.id, patch: { routing: { mode: 'frozen' } } }]);
+    const frozen = await s.run([{ op: 'reroute', targets: [cd.id] }]);
+    expect(!frozen.ok && frozen.error.details?.reason).toBe('route_not_automatic');
+    await s.ok([{ op: 'set', target: ab.id, patch: { locked: true } }]);
+    expect(await code([{ op: 'reroute', targets: [ab.id] }])).toBe('locked_target');
+  });
+
   it('reroute named for a manual or frozen connector is refused; unnamed it skips them', async () => {
     const s = await setup();
     await s.ok([{ op: 'set', target: 'ab', patch: { routing: { mode: 'frozen' } } }]);

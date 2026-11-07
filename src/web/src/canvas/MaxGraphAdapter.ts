@@ -15,6 +15,8 @@ import { installGestureHooks } from './gestureHooks';
 import { pageOf } from './intents';
 import { carriedConnectors, carriedLeaves } from './selection';
 
+export interface RouteMemory { sig: string; planned: ReadonlyMap<string, PlannedRoute>; changes: RouteChange[]; findings: import('../contracts/generated').RouteFinding[] }
+
 const MARGIN_PT = 40;
 const PX_PER_PT = 96 / 72; // 100% zoom
 export const DEFAULT_SCALE = PX_PER_PT;
@@ -337,6 +339,13 @@ export class MaxGraphAdapter implements CanvasAdapter {
   private routeChanges: RouteChange[] = [];
   private routeFindings: import('../contracts/generated').RouteFinding[] = [];
   routePlan(): { routes: ReadonlyMap<string, PlannedRoute>; changes: readonly RouteChange[] } { return { routes: this.planned, changes: this.routeChanges }; }
+  /** R25: the planner's memory, so projecting a document that is never committed (a route proposal) can be taken back. */
+  saveRouteMemory(): RouteMemory { return { sig: this.routingSig, planned: this.planned, changes: this.routeChanges, findings: this.routeFindings }; }
+  /** Puts saved memory back and forgets which cells are drawn, so the next projection draws every cell from that memory again. */
+  restoreRouteMemory(m: RouteMemory): void {
+    this.routingSig = m.sig; this.planned = m.planned; this.routeChanges = m.changes; this.routeFindings = m.findings;
+    this.shown.clear();
+  }
 
   /** Connectors a hopping connector does not hop: the ones it is joined to or that join it, because those meet it on purpose. */
   private hopIgnoreOf(el: Extract<Element, { kind: 'connector' }>): string[] {
