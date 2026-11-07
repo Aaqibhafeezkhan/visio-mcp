@@ -394,6 +394,7 @@ public sealed class NativeVsdxImporter : IVsdxImporter
                 // group bounds are derived from their members; groups stack with their topmost member
                 foreach (var (group, _, _) in groups.AsEnumerable().Reverse()) FinishGroup(group);
                 NormalizeStackingLevels();
+                ResolveContainers();
                 _ = pageUser;
             }
 
@@ -448,6 +449,7 @@ public sealed class NativeVsdxImporter : IVsdxImporter
                 if (type == "Guide" || u.GetValueOrDefault("AgentKind") == "guide") { ReadGuide(s, sid); return; }
                 var xf = Transform(s, parent);
                 if (D(Own(s, "FlipX")) != 0 || D(Own(s, "FlipY")) != 0) Note("flip_not_supported", "A flipped shape was imported unflipped.", idByShape[sid], sid, "flip dropped");
+                if (type == "Group" && u.GetValueOrDefault("msvStructureType") == "Container") { ReadContainerGroup(s, sid, u, xf); return; }
                 if (type == "Group") { ReadGroup(s, sid, u, xf, connects); return; }
                 if (type == "Foreign") { ReadPicture(s, sid, u, xf); return; }
                 if (IsConnector(s)) { ReadConnector(s, sid, u, xf, connects); return; }
@@ -1172,6 +1174,111 @@ public sealed class NativeVsdxImporter : IVsdxImporter
                 {
                     elements.Remove(el); elementById.Remove(el["id"]!.GetValue<string>()); groups.RemoveAll(g => g.Group == el);
                     Note("empty_group_dropped", "A group with no importable members was dropped.", el["id"]!.GetValue<string>(), sid, "group dropped", "info");
+                }
+            }
+
+            /// <summary>
+            /// R17: a container from a Visio stencil is a group of frame and heading parts. It becomes one container shape: the group's own box,
+            /// line and fill, and the heading's text. Its members are separate shapes on the page and are resolved afterwards.
+            /// </summary>
+            void ReadContainerGroup(XElement s, string sid, Dictionary<string, string> u, Xf xf)
+            {
+                var id = idByShape[sid];
+                var shape = Base(s, sid, u, "shape", xf);
+                shape["geometry"] = new JsonObject { ["preset"] = "rectangle" };
+                shape["style"] = Style(s, id, u);
+                var heading = s.Descendants(V + "Shape").FirstOrDefault(c => userByShape.GetValueOrDefault((string?)c.Attribute("ID") ?? "")?.GetValueOrDefault("msvStructureType") == "Heading");
+                var text = heading is not null ? ReadText(heading, userByShape[(string?)heading.Attribute("ID") ?? ""], id) : ReadText(s, u, id);
+                if (text is not null) shape["text"] = text;
+                Add(shape);
+                Note("container_master_simplified", "A Visio container from a stencil was imported as a container frame with its heading text; the stencil's heading style is not kept.", id, sid, "container frame", "info");
+            }
+
+            /// <summary>
+            /// R17: Visio's container record. A container lists its members (DEPENDSON 1) and a member names its containers (DEPENDSON 4). A file
+            /// built by dragging in Visio lists every depth; one built through Visio's API or by the editor lists only direct members. Either way
+            /// a member's direct container is the innermost one that claims it. Visio also makes a shape resting on a container's edge a member
+            /// (DEPENDSON 7 to 10 beside 4), so a shape can belong to two containers that are not nested; there, ordinary membership wins over
+            /// resting on an edge, and the smallest container breaks a remaining tie. A file the editor wrote names each member's container in
+            /// User.AgentContainer; while Visio still lists the member there, that choice is kept. Resize (0 none, 1 grow, 2 fit) and margin (inches) map back.
+            /// </summary>
+            void ResolveContainers()
+            {
+                var claims = new Dictionary<string, HashSet<string>>(); // member id to the container ids that claim it
+                var edges = new Dictionary<string, HashSet<string>>();  // member id to the containers whose edge it rests on
+                var order = new Dictionary<string, List<string>>();     // container id to members in the order it lists them
+                void Claim(string container, string member)
+                {
+                    if (container == member) return;
+                    if (!claims.TryGetValue(member, out var set)) claims[member] = set = new();
+                    set.Add(container);
+                    if (!order.TryGetValue(container, out var list)) order[container] = list = new();
+                    if (!list.Contains(member)) list.Add(member);
+                }
+                bool IsContainer(string sid) => userByShape.GetValueOrDefault(sid)?.GetValueOrDefault("msvStructureType") == "Container";
+                foreach (var (sid, s) in shapeById)
+                {
+                    var formula = s.Elements(V + "Cell").FirstOrDefault(c => (string?)c.Attribute("N") == "Relationships")?.Attribute("F")?.Value;
+                    if (formula is null || !idByShape.TryGetValue(sid, out var self)) continue;
+                    foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(formula, @"DEPENDSON\((\d+)((?:,[^,()]+!SheetRef\(\))*)\)"))
+                    {
+                        var kind = m.Groups[1].Value;
+                        var refs = System.Text.RegularExpressions.Regex.Matches(m.Groups[2].Value, @"Sheet\.(\d+)!").Select(r => r.Groups[1].Value).Where(idByShape.ContainsKey).ToList();
+                        if (kind == "1" && IsContainer(sid)) foreach (var r in refs) Claim(self, idByShape[r]);
+                        if (kind == "4") foreach (var r in refs) if (IsContainer(r)) Claim(idByShape[r], self);
+                        if (kind is "7" or "8" or "9" or "10") foreach (var r in refs) { if (!edges.TryGetValue(self, out var e)) edges[self] = e = new(); e.Add(idByShape[r]); }
+                    }
+                }
+                var groupOf = new Dictionary<string, string>();
+                foreach (var (g, _, _) in groups) foreach (var c in (JsonArray)g["childIds"]!) groupOf[c!.GetValue<string>()] = g["id"]!.GetValue<string>();
+                var direct = new Dictionary<string, string>();
+                double Area(string id) => elementById.TryGetValue(id, out var e) && e["bounds"] is JsonObject b ? b["width"]!.GetValue<double>() * b["height"]!.GetValue<double>() : double.MaxValue;
+                var chosenBy = new Dictionary<string, string>(); // member id to the container the editor named for it
+                foreach (var (sid, u) in userByShape)
+                    if (u.GetValueOrDefault("AgentContainer") is { } named && IdentityMap.IsUuid(named) && idByShape.TryGetValue(sid, out var mid)) chosenBy[mid] = named.ToLowerInvariant();
+                foreach (var (member, all) in claims)
+                {
+                    var claimed = all;
+                    // resting on an edge yields to ordinary membership; then the innermost claimant is the one claimed by all the others
+                    if (chosenBy.TryGetValue(member, out var chosen) && claimed.Contains(chosen)) claimed = new HashSet<string> { chosen };
+                    var held = claimed.Where(c => !(edges.GetValueOrDefault(member)?.Contains(c) ?? false)).ToHashSet();
+                    var holders = held.Count > 0 ? held : claimed;
+                    var inner = holders.FirstOrDefault(c => holders.All(o => o == c || (claims.TryGetValue(c, out var up) && up.Contains(o))));
+                    if (inner is null)
+                    {
+                        inner = holders.OrderBy(Area).First();
+                        Note("container_member_ambiguous", "Visio lists this shape in more than one container that are not nested; the editor keeps one container per element and chose the smallest.", member, null, "smallest container kept", "info");
+                    }
+                    if (inner is null || !elementById.ContainsKey(member) || !elementById.TryGetValue(inner, out var box) || box["kind"]!.GetValue<string>() != "shape") continue;
+                    if (groupOf.GetValueOrDefault(member) != groupOf.GetValueOrDefault(inner))
+                    {
+                        Note("container_member_skipped", "A Visio container member sits in a different group from its container; the editor keeps a container and its members in the same group, so this membership was not kept.", member, null, "membership dropped", "info");
+                        continue;
+                    }
+                    direct[member] = inner;
+                }
+                // a file whose containers hold each other in a loop cannot keep it: the loop is broken where it is found
+                foreach (var start in direct.Keys.ToList())
+                {
+                    var seen = new HashSet<string>();
+                    for (var at = start; direct.TryGetValue(at, out var up); at = up)
+                    {
+                        if (seen.Add(at)) continue;
+                        direct.Remove(at);
+                        Note("container_cycle_dropped", "Visio lists these containers inside each other in a loop; the editor keeps containers nested one way, so this membership was not kept.", at, null, "membership dropped", "info");
+                        break;
+                    }
+                }
+                foreach (var (sid, _) in shapeById)
+                {
+                    if (!IsContainer(sid) || !idByShape.TryGetValue(sid, out var cid) || !elementById.TryGetValue(cid, out var el) || el["kind"]!.GetValue<string>() != "shape") continue;
+                    var u = userByShape[sid];
+                    var box = new JsonObject { ["memberIds"] = new JsonArray((order.GetValueOrDefault(cid) ?? []).Where(m => direct.GetValueOrDefault(m) == cid).Select(m => (JsonNode)m).ToArray()) };
+                    var fit = u.GetValueOrDefault("msvSDContainerResize") switch { "1" => "grow", "2" => "fit", _ => null };
+                    if (fit is not null) box["fit"] = fit;
+                    var margin = Math.Round(D(u.GetValueOrDefault("msvSDContainerMargin"), 0) * 72, 4);
+                    if (margin > 0) box["marginPt"] = Math.Min(margin, 500);
+                    el["container"] = box;
                 }
             }
 

@@ -4,7 +4,8 @@ import type { EditorModel } from '../editor/EditorModel';
 import { useModel } from './useModel';
 
 const SHORT: Record<string, string> = {
-  group: 'Group', ungroup: 'Ungroup', front: 'To front', forward: 'Forward', backward: 'Backward', back: 'To back',
+  group: 'Group', ungroup: 'Ungroup',
+  'make-container': 'Make', 'add-to-container': 'Add', 'remove-from-container': 'Remove', 'disband-container': 'Disband', front: 'To front', forward: 'Forward', backward: 'Backward', back: 'To back',
   'align-left': 'Left', 'align-center': 'Centre', 'align-right': 'Right', 'align-top': 'Top', 'align-middle': 'Middle', 'align-bottom': 'Bottom',
   'distribute-h': 'Across', 'distribute-v': 'Down',
 };
@@ -28,6 +29,8 @@ export function ArrangePanel({ model }: { model: EditorModel }) {
     <section className="arrange-panel" aria-label="Arrange" data-testid="arrange-panel">
       <h3>Arrange</h3>
       <div className="row wrap">{btn('group')}{btn('ungroup')}</div>
+      <h4>Container</h4>
+      <div className="row wrap">{['make-container', 'add-to-container', 'remove-from-container', 'disband-container'].map(btn)}</div>
       <h4>Order</h4>
       <div className="row wrap">{['front', 'forward', 'backward', 'back'].map(btn)}</div>
       <div className="row wrap">

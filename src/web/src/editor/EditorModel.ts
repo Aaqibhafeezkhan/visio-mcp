@@ -15,7 +15,10 @@ import { GestureController, type GestureKind, type GestureToken } from '../canva
 import { createSnapshotProjector } from '../canvas/SnapshotProjector';
 import { inspectLayout, type LayoutIssue } from '../layout/inspectLayout';
 import { ROUTE_FINDING_CODES } from '../layout/inspectRoutes';
-import { collapseToGroups, expandToGroups, leavesOfTargets } from '../canvas/selection';
+import { carriedLeaves, collapseToGroups, expandToGroups, leavesOfTargets, outermostTargets } from '../canvas/selection';
+import { containerAncestors, containerParents, isContainer } from '../layout/containers';
+import { parentMap } from '../commands/groups';
+import { visualBounds, unionBounds } from '../commands/geometry';
 import { deleteOperations, findElement, intentOperations, nudgeOperations, pageContaining, pageOf, type Intent } from '../canvas/intents';
 import { fail, ok, type Result } from '../model/result';
 import { canDeleteAsset, prepareDocumentAsset, imagesUsing, replaceEverywhere, replaceOneImage } from '../commands/assetVersions';
@@ -662,7 +665,7 @@ export class EditorModel {
   // ------------------------------------------------------------------ groups, arrangement, stacking
   /** Runs one structural operation on the current targets as a single transaction and keeps the members selected. */
   private async arrangeWith(build: (targets: string[]) => Operation, minimum: number, what: string): Promise<Result<TransactionResult> | null> {
-    const targets = this.targets;
+    const targets = outermostTargets(this.snapshot, this.targets); // R17: what is inside a selected container moves with it
     if (targets.length < minimum) { this.say(`Select at least ${minimum} object${minimum === 1 ? '' : 's'} to ${what}.`, 'info'); return null; }
     const r = await this.apply('arrange', [build(targets)]);
     if (r.ok) this.canvas?.setSelection(this.selection);
@@ -670,8 +673,88 @@ export class EditorModel {
   }
 
   async group(): Promise<void> {
-    const r = await this.arrangeWith(targets => ({ op: 'group', targets }), 2, 'group');
+    // R17: a container is grouped with everything inside it, since a container and its members share a group
+    const r = await this.arrangeWith(targets => ({ op: 'group', targets: [...targets, ...this.withContents(targets).filter(id => !targets.includes(id))] }), 2, 'group');
     if (r?.ok) this.say('Grouped.', 'info');
+  }
+
+  // ------------------------------------------------------------------ containers (R17)
+  /** The top-level objects inside the given containers, at every depth (a member inside a group is counted by its group). */
+  private withContents(targets: readonly string[]): string[] {
+    const groups = parentMap(this.currentPage.elements);
+    const top = (id: string) => { let x = id; for (let p = groups.get(x); p !== undefined; p = groups.get(p)) x = p; return x; };
+    return [...new Set(carriedLeaves(this.snapshot, targets).map(top))];
+  }
+
+  /** Selected containers, the other selected objects, and the selected objects that are in a container. */
+  get containerSelection(): { containers: Element[]; others: string[]; members: string[] } {
+    const targets = this.targets;
+    const containers = targets.map(id => findElement(this.snapshot, id)).filter((e): e is Element => isContainer(e));
+    const holders = containerParents(this.currentPage.elements);
+    return { containers, others: targets.filter(id => !containers.some(c => c.id === id)), members: targets.filter(id => holders.has(id)) };
+  }
+
+  /**
+   * Draws a container around the selection and makes the selection its members. It grows with its members, sits behind them, and joins
+   * the container they were in, if they all shared one.
+   */
+  async makeContainer(): Promise<void> {
+    const snapshot = this.snapshot;
+    const units = outermostTargets(snapshot, this.targets);
+    if (!units.length) { this.say('Select the objects to put in a container.', 'info'); return; }
+    const groups = parentMap(this.currentPage.elements);
+    if (units.some(id => groups.has(id))) { this.say('A container holds whole objects: select the whole group rather than part of it.', 'info'); return; }
+    const margin = 12;
+    const inner = unionBounds(units.map(id => visualBounds(findElement(snapshot, id)!)));
+    const id = crypto.randomUUID();
+    const holders = containerParents(this.currentPage.elements);
+    const shared = holders.get(units[0]!);
+    const parent = shared !== undefined && units.every(u => holders.get(u) === shared) ? shared : undefined;
+    const operations: Operation[] = [
+      {
+        op: 'createShape', id, pageId: this.currentPage.id, name: 'Container',
+        bounds: { x: inner.x - margin, y: inner.y - margin, width: inner.width + 2 * margin, height: inner.height + 2 * margin },
+        style: { fill: { kind: 'solid', colour: '#f8fafc', opacity: 1 }, stroke: { kind: 'solid', colour: '#64748b', opacity: 1 }, dash: 'dashed' },
+        container: { memberIds: units, fit: 'grow', marginPt: margin },
+      },
+      // the engine stacks it just behind its lowest member, so it stays in front of its own container and of a page background
+      ...(parent !== undefined ? [{ op: 'contain', container: parent, add: [id] } as Operation] : []),
+    ];
+    const r = await this.apply('arrange', operations);
+    if (!r.ok) return;
+    this.selection = [id]; this.canvas?.setSelection(this.selection);
+    this.say(`Put ${units.length} object${units.length === 1 ? '' : 's'} in a container.`, 'info');
+  }
+
+  /** Adds the other selected objects to the selected container (the largest, if several are selected). */
+  async addToContainer(): Promise<void> {
+    const { containers, others } = this.containerSelection;
+    if (!containers.length || (!others.length && containers.length < 2)) { this.say('Select a container and the objects to add to it.', 'info'); return; }
+    const target = [...containers].sort((a, b) => b.bounds.width * b.bounds.height - a.bounds.width * a.bounds.height)[0]!;
+    const holders = containerParents(this.currentPage.elements);
+    const above = new Set(containerAncestors(holders, target.id));
+    const add = outermostTargets(this.snapshot, this.targets).filter(id => id !== target.id && !above.has(id) && holders.get(id) !== target.id);
+    if (!add.length) { this.say('Those objects are already in that container.', 'info'); return; }
+    const r = await this.apply('arrange', [{ op: 'contain', container: target.id, add }]);
+    if (r.ok) this.say(`Added ${add.length} object${add.length === 1 ? '' : 's'} to the container.`, 'info');
+  }
+
+  /** Takes the selected objects out of their containers; each moves up to its container's own container, if any. */
+  async removeFromContainer(): Promise<void> {
+    const holders = containerParents(this.currentPage.elements);
+    const byContainer = new Map<string, string[]>();
+    for (const id of this.containerSelection.members) { const c = holders.get(id)!; byContainer.set(c, [...(byContainer.get(c) ?? []), id]); }
+    if (!byContainer.size) { this.say('Select objects that are in a container.', 'info'); return; }
+    const r = await this.apply('arrange', [...byContainer].map(([container, remove]) => ({ op: 'contain', container, remove }) as Operation));
+    if (r.ok) this.say('Removed from the container.', 'info');
+  }
+
+  /** Stops the selected containers being containers; the shapes stay, and what they held moves up a level. */
+  async disbandContainer(): Promise<void> {
+    const { containers } = this.containerSelection;
+    if (!containers.length) { this.say('Select a container to disband.', 'info'); return; }
+    const r = await this.apply('arrange', containers.map(c => ({ op: 'set', target: c.id, patch: { container: null } }) as Operation));
+    if (r.ok) this.say('Disbanded.', 'info');
   }
 
   async ungroup(): Promise<void> {

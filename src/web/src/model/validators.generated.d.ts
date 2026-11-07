@@ -38,3 +38,7 @@ export const DeleteLayer: ValidateFn;
 export const SetAsset: ValidateFn;
 export const RemoveAsset: ValidateFn;
 export const ReplaceAsset: ValidateFn;
+export const Contain: ValidateFn;
+export const Reroute: ValidateFn;
+export const MoveSegment: ValidateFn;
+export const PinSegment: ValidateFn;

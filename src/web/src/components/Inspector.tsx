@@ -66,6 +66,34 @@ function PaintField({ label, paint, testId, onCommit, gradients = false }: { lab
   );
 }
 
+/** R17: a container's fit and margin, and for a member the container it is in. Each change is one transaction, as elsewhere here. */
+function ContainerFields({ el, model, set }: { el: Element; model: EditorModel; set: (patch: Record<string, unknown>) => void }) {
+  const page = model.pageOfElement(el.id);
+  const holder = page.elements.find(e => e.kind === 'shape' && e.container?.memberIds.includes(el.id));
+  const box = el.kind === 'shape' ? el.container : undefined;
+  if (!box && !holder) return null;
+  const label = (e: Element) => e.name ?? e.alias ?? (e.kind === 'shape' ? e.text?.value : undefined) ?? 'a container';
+  return (
+    <section data-testid="container-fields">
+      <h3>Container</h3>
+      {box && <>
+        <p className="muted small" data-testid="container-members">Holds {box.memberIds.length} object{box.memberIds.length === 1 ? '' : 's'}; they move with it and keep their size when it is resized.</p>
+        <label className="field"><span>Fit</span>
+          <select value={box.fit ?? 'none'} data-testid="field-container-fit" onChange={e => set({ container: { fit: e.target.value } })}>
+            <option value="none">Leave its size alone</option><option value="grow">Grow to keep its members inside</option><option value="fit">Fit its members exactly</option>
+          </select>
+        </label>
+        <NumberField label="Margin pt" testId="field-container-margin" value={box.marginPt ?? 0} min={0} onCommit={v => set({ container: { marginPt: Math.max(0, Math.min(500, v)) } })} />
+        <button type="button" data-testid="container-disband" title="Stop this shape being a container; what it holds moves up a level" onClick={() => set({ container: null })}>Disband</button>
+      </>}
+      {holder && <>
+        <p className="muted small" data-testid="container-holder">Inside {label(holder)}.</p>
+        <button type="button" data-testid="container-remove" title="Take this object out of its container" onClick={() => void model.apply('inspector', [{ op: 'contain', container: holder.id, remove: [el.id] }])}>Remove from container</button>
+      </>}
+    </section>
+  );
+}
+
 function RoutingPolicyFields({ policy, hasText, setPolicy, includeObstacle }: {
   policy: RoutingPolicy | undefined;
   hasText: boolean;
@@ -179,6 +207,7 @@ export function Inspector({ model }: { model: EditorModel }) {
           setPolicy={patch => set({ routingPolicy: { ...(el.routingPolicy ?? {}), ...patch } })} />
       )}
       {(el.kind === 'shape' || el.kind === 'text') && el.attachment && <Pin el={el} model={model} set={set} />}
+      <ContainerFields el={el} model={model} set={set} />
       {el.kind === 'image' && <ImageProps el={el} model={model} set={set} />}
 
       {text && (

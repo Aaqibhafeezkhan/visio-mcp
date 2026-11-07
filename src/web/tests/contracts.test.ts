@@ -80,6 +80,50 @@ describe('contract validation', () => {
     expect(validateMutationRequest({ ...validBatch(), atomic: false }).ok).toBe(false);
   });
 
+  it('returns invalid_request instead of throwing for every operation in the union', () => {
+    // The three routing ops were missing from opValidators: a malformed one threw
+    // `TypeError: v is not a function` instead of returning invalid_request (#91).
+    // targets/connector with the wrong type: schema-invalid, but the branch must be
+    // reached through opValidators instead of blowing up on the lookup.
+    for (const op of ['reroute', 'moveSegment', 'pinSegment']) {
+      const r = validateMutationRequest({ ...validBatch(), operations: [{ op, targets: 5 }] });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('invalid_request');
+    }
+
+    // A schema-valid body of each kind must also come back as a result, not a throw.
+    const valid: Record<string, object> = {
+      reroute: { targets: [U(4)] },
+      moveSegment: { target: U(5), segment: 1, to: 0 },
+      pinSegment: { target: U(5), segment: 0, pinned: true },
+    };
+    for (const op of Object.keys(valid)) {
+      const r = validateMutationRequest({ ...validBatch(), operations: [{ op, ...valid[op] }] });
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  it('every operation in the schema union has a per-operation validator', () => {
+    const schema = JSON.parse(readFileSync(new URL('../../../contracts/operations.schema.json', import.meta.url), 'utf8'));
+    const names = (schema.$defs.Operation.oneOf as Array<{ $ref: string }>).map(r => r.$ref.replace('#/$defs/', ''));
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      const tag = schema.$defs[name].properties.op.const;
+      // `{op: tag}` alone is schema-valid for operations with no other required fields (Reroute),
+      // so validation returns before the per-op validator is ever consulted. A schema-forbidden
+      // extra property fails the union for every operation and forces that lookup, which is what
+      // used to throw `TypeError: v is not a function` for an unregistered operation (#91).
+      const r = validateMutationRequest({ ...validBatch(), operations: [{ op: tag, probe: true }] });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.code).toBe('invalid_request');
+        // A missing opByTag entry also returns invalid_request, but about the op tag itself (keyword 'enum',
+        // "not a known operation"). A registered tag reports a problem inside the branch instead.
+        expect(r.error.details).not.toMatchObject({ path: '/operations/0/op', keyword: 'enum' });
+      }
+    }
+  });
+
   it('rejects duplicate ids and duplicate aliases created in one batch', () => {
     const create = (extra: object) => ({ op: 'createShape', bounds: { x: 0, y: 0, width: 10, height: 10 }, ...extra });
     const sameId = validateMutationRequest({ ...validBatch(), operations: [create({ id: U(10) }), create({ id: U(10) })] });

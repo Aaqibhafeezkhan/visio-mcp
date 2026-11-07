@@ -136,6 +136,8 @@ test('z order from the context menu changes what is drawn on top', async ({ page
   const r0 = await revision(page);
   await page.mouse.click(exposed.x, exposed.y, { button: 'right' });
   await expect(page.getByTestId('context-menu')).toBeVisible();
+  expect(await selection(page)).toEqual([under.id]); // the button's release reaches the shape, not the menu opened under the pointer
+  await expect(page.getByTestId('context-front')).toBeEnabled();
   await page.getByTestId('context-front').click();
   await expect.poll(() => revision(page)).toBe(r0 + 1);
   await expect(page.getByTestId('context-menu')).toHaveCount(0);
@@ -152,7 +154,40 @@ test('z order from the context menu changes what is drawn on top', async ({ page
   expect((await get(page, under.id)).zIndex).toBeLessThan((await get(page, over.id)).zIndex);
   await page.keyboard.press('Control+z');
   await expect.poll(async () => (await get(page, under.id)).zIndex).toBeGreaterThan((await get(page, over.id)).zIndex);
+  // and a second undo takes back Bring to front itself: the original order, drawn as before
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await get(page, under.id)).zIndex).toBeLessThan((await get(page, over.id)).zIndex);
+  expect((await fillAt(overlap)).toLowerCase()).toBe('#0000ff');
   expect(k).toBeGreaterThan(0);
+});
+
+test('right-clicking another shape selects it; right-clicking empty canvas clears the selection, as a click there does', async ({ page }) => {
+  await openEditor(page);
+  const a = await placeShape(page, 'shape-rectangle', { x: 200, y: 200 }, 'a');
+  const b = await placeShape(page, 'shape-rectangle', { x: 500, y: 200 }, 'b'); // placed last, so in front of `a`
+  const pa = await centre(page, a.id), pb = await centre(page, b.id);
+  await page.mouse.click(pa.x, pa.y);
+  expect(await selection(page)).toEqual([a.id]);
+
+  await test.step('right-click on another shape: it becomes the selection and the menu acts on it', async () => {
+    await page.mouse.click(pb.x, pb.y, { button: 'right' });
+    await expect(page.getByTestId('context-menu')).toBeVisible();
+    expect(await selection(page)).toEqual([b.id]);
+    const r0 = await revision(page);
+    await page.getByTestId('context-back').click();
+    await expect.poll(() => revision(page)).toBe(r0 + 1);
+    expect((await get(page, b.id)).zIndex).toBeLessThan((await get(page, a.id)).zIndex);
+  });
+
+  await test.step('right-click on empty canvas: nothing is selected, so only actions that need no selection are offered', async () => {
+    const empty = await ptToClient(page, { x: 800, y: 560 });
+    await page.mouse.click(empty.x, empty.y, { button: 'right' });
+    await expect(page.getByTestId('context-menu')).toBeVisible();
+    expect(await selection(page)).toEqual([]);
+    await expect(page.getByTestId('context-copy')).toBeDisabled();
+    await expect(page.getByTestId('context-front')).toBeDisabled();
+    await expect(page.getByTestId('context-paste')).toBeEnabled();
+  });
 });
 
 test('group, drag, ungroup and delete with real selection; one undo restores each action', async ({ page }) => {

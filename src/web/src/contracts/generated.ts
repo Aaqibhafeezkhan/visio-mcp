@@ -138,6 +138,12 @@ export interface Attachment {
   offsetPt: number;
 }
 
+export interface Container {
+  memberIds: Uuid[];
+  fit?: "none" | "grow" | "fit";
+  marginPt?: number;
+}
+
 export interface ShapeGeometry {
   preset?: "rectangle" | "rounded-rectangle" | "ellipse" | "diamond" | "triangle" | "hexagon" | "parallelogram" | "cylinder" | "cloud" | "callout" | "terminator" | "stored-data" | "document" | "lined-document";
   svgPath?: string;
@@ -177,6 +183,7 @@ export interface ShapeElement {
   text?: TextBlock;
   ports?: Port[];
   attachment?: Attachment;
+  container?: Container;
 }
 
 export interface TextElement {
@@ -380,6 +387,10 @@ export interface ElementPatch {
   position?: number;
   offsetPt?: number;
 } | null;
+  container?: {
+  fit?: "none" | "grow" | "fit";
+  marginPt?: number;
+} | null;
   labelAnchor?: {
   position?: number;
   offsetPt?: number;
@@ -404,6 +415,7 @@ export interface CreateShapeOp {
   text?: TextBlockPatch;
   ports?: Port[];
   attachment?: AttachmentInput;
+  container?: ContainerInput;
 }
 
 export interface CreateTextOp {
@@ -455,6 +467,12 @@ export interface CreateConnectorOp {
   routing?: {
     mode: "automatic" | "manual" | "frozen" | "guided";
   };
+}
+
+export interface ContainerInput {
+  memberIds?: Target[];
+  fit?: "none" | "grow" | "fit";
+  marginPt?: number;
 }
 
 export interface AttachmentInput {
@@ -513,6 +531,7 @@ export interface DeleteOp {
   target: Target;
   withConnectors?: boolean;
   children?: "delete" | "ungroup";
+  members?: "delete" | "keep";
 }
 
 export interface RegisterAssetOp {
@@ -541,7 +560,7 @@ export interface SetPageOp {
   patch: PagePatch;
 }
 
-export type Operation = CreateShapeOp | CreateTextOp | CreateImageOp | CreateConnectorOp | SetOp | MoveOp | ResizeOp | RotateOp | DeleteOp | RegisterAssetOp | SetPageOp | DuplicateOp | GroupOp | UngroupOp | AlignOp | DistributeOp | SetGapOp | ReorderOp | RerouteOp | AddPageOp | ReorderPageOp | DuplicatePageOp | DeletePageOp | AddLayerOp | SetLayerOp | AssignLayersOp | DeleteLayerOp | SetAssetOp | RemoveAssetOp | ReplaceAssetOp | MoveSegmentOp | PinSegmentOp;
+export type Operation = CreateShapeOp | CreateTextOp | CreateImageOp | CreateConnectorOp | SetOp | MoveOp | ResizeOp | RotateOp | DeleteOp | RegisterAssetOp | SetPageOp | DuplicateOp | GroupOp | UngroupOp | AlignOp | DistributeOp | SetGapOp | ReorderOp | RerouteOp | AddPageOp | ReorderPageOp | DuplicatePageOp | DeletePageOp | AddLayerOp | SetLayerOp | AssignLayersOp | DeleteLayerOp | SetAssetOp | RemoveAssetOp | ReplaceAssetOp | MoveSegmentOp | PinSegmentOp | ContainOp;
 
 export interface DuplicateOp {
   op: "duplicate";
@@ -564,6 +583,13 @@ export interface GroupOp {
 export interface UngroupOp {
   op: "ungroup";
   target: Target;
+}
+
+export interface ContainOp {
+  op: "contain";
+  container: Target;
+  add?: Target[];
+  remove?: Target[];
 }
 
 export interface AlignOp {
