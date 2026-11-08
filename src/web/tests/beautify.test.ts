@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectorElement, DiagramDocument, Element, Operation } from '../src/contracts/generated';
+import type { ConnectorElement, DiagramDocument, Element, Operation, ShapeElement } from '../src/contracts/generated';
 import { buildBeautifyPreview } from '../src/editor/beautifyPreview';
 import { createTestEngine, element, seedDocument } from './support/engine';
 
@@ -56,6 +56,33 @@ describe('atomic Beautify transaction', () => {
     const redo = await t.engine.redo({ ...t.engine.scope(), transactionId: id(901), baseRevision: t.engine.revision });
     expect(redo.ok).toBe(true);
     expect((element(t.store.snapshot(), id(701)) as ConnectorElement).routing?.advisory).toEqual(exact);
+  });
+
+  it('beside a fitting container (R17) the commit changes only the target, leaves the container alone, and one undo restores it', async () => {
+    const source = documentWithConnectors({ a: {
+      label: { value: 'Nearby measured label', fontFamily: 'Test', fontSizePt: 10, bold: false, italic: false, underline: false, colour: '#000000', horizontalAlign: 'center', verticalAlign: 'middle', wrap: false, paddingPt: 0 },
+      labelAnchor: { position: 0.5, offsetPt: 6 },
+    } });
+    const page = source.pages[0]!;
+    const [m1, m2, box] = seedDocument(4).document.pages[0]!.elements.filter(item => item.kind === 'shape') as ShapeElement[];
+    const at = (shape: ShapeElement, n: number, bounds: ShapeElement['bounds']): ShapeElement => ({ ...shape, id: id(n), alias: `c${n}`, bounds });
+    const container = { ...at(box!, 720, { x: 10, y: 10, width: 300, height: 80 }), container: { memberIds: [id(721), id(722)], fit: 'fit' as const, marginPt: 10 } } as ShapeElement;
+    page.elements.push(at(m1!, 721, { x: 20, y: 20, width: 100, height: 60 }), at(m2!, 722, { x: 200, y: 20, width: 100, height: 60 }), container);
+
+    const preview = await buildBeautifyPreview(source, page.id, [id(701)], { measureWidth: text => text.length * 7.12345 });
+    expect(preview.proposedRoutes).toHaveLength(1);
+    const t = createTestEngine({ document: source });
+    const before = JSON.stringify(element(t.store.snapshot(), id(720)));
+    const committed = await t.engine.execute(t.request([operation(page.id, preview.baseRevision, preview.targets, preview.proposedRoutes)]), 'gui');
+    if (!committed.ok) throw new Error(JSON.stringify(committed.error));
+    expect(committed.value.changed).toEqual([id(701)]);
+    expect((element(t.store.snapshot(), id(701)) as ConnectorElement).routing?.advisory).toEqual(preview.proposedRoutes[0]!.points);
+    expect(JSON.stringify(element(t.store.snapshot(), id(720)))).toBe(before);
+
+    const undo = await t.engine.undo({ ...t.engine.scope(), transactionId: id(902), baseRevision: t.engine.revision });
+    expect(undo.ok).toBe(true);
+    expect(element(t.store.snapshot(), id(701))).toEqual(connector(701));
+    expect(JSON.stringify(element(t.store.snapshot(), id(720)))).toBe(before);
   });
 
   it('rejects an operation whose preview revision is stale before changing state', async () => {
