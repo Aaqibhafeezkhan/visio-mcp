@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { endFor, routeOrthogonal, type Terminal } from '../src/layout/orthogonalRoute';
-import { avoidObstacles, segmentsOf, type Rect } from '../src/layout/obstacleRoute';
+import { avoidObstacles, countCrossingsOnSegment, countCrossingsAtVertex, segmentsOf, type Rect } from '../src/layout/obstacleRoute';
 
 const term = (x: number, y: number, w = 100, h = 60): Terminal => ({ box: { x, y, width: w, height: h }, rotationDeg: 0 });
 const rect = (t: Terminal): Rect => t.box;
@@ -95,5 +95,19 @@ describe('obstacle-aware routing', () => {
     const track = (r: typeof r1.route) => Math.max(...segmentsOf(r).filter(s => Math.abs(s.a.y - s.b.y) < 1e-6).map(s => Math.abs(s.a.x - s.b.x)));
     expect(track(r1.route)).toBeGreaterThan(0);
     expect(overlap(r1.route, r2.route)).toBeLessThan(Math.max(track(r1.route), track(r2.route)));
+  });
+});
+
+describe('aesthetic crossing counts', () => {
+  const occupied = [{ a: { x: 50, y: 0 }, b: { x: 50, y: 100 }, ownerId: 'vertical' }];
+  it('counts a straight crossing once at the grid vertex, not on either adjoining half-edge', () => {
+    expect(countCrossingsOnSegment({ x: 0, y: 50 }, { x: 100, y: 50 }, occupied)).toBe(1);
+    expect(countCrossingsOnSegment({ x: 0, y: 50 }, { x: 50, y: 50 }, occupied)).toBe(0);
+    expect(countCrossingsOnSegment({ x: 50, y: 50 }, { x: 100, y: 50 }, occupied)).toBe(0);
+    expect(countCrossingsAtVertex({ x: 50, y: 50 }, { x: -1, y: 0 }, { x: 1, y: 0 }, occupied)).toBe(1);
+  });
+
+  it('does not count a route that turns at the other connector track', () => {
+    expect(countCrossingsAtVertex({ x: 50, y: 50 }, { x: -1, y: 0 }, { x: 0, y: -1 }, occupied)).toBe(0);
   });
 });

@@ -69,8 +69,10 @@ export function appCommands(model: EditorModel, ws: WorkspaceModel): AppCommand[
     { id: 'select-all', label: 'Select all', group: 'Edit', shortcut: 'Ctrl+A', run: () => model.selectAll() },
     { id: 'connect', label: 'Connect objects…', group: 'Edit', sepBefore: true, run: () => model.beginConnect() },
     { id: 'preferences', label: 'Preferences…', group: 'Edit', sepBefore: true, run: () => void ws.openPreferences() },
+    { id: 'routing-defaults', label: 'Routing defaults…', group: 'Edit', run: () => model.openRoutingDefaults() },
 
     ...arrange,
+    { id: 'beautify-preview', label: 'Preview Beautify…', group: 'Arrange', sepBefore: true, run: () => model.beginBeautify(model.selection.length ? 'selection' : 'page') },
 
     { id: 'zoom-in', label: 'Zoom in', group: 'View', shortcut: 'Ctrl++', run: () => model.zoomBy(1.25) },
     { id: 'zoom-out', label: 'Zoom out', group: 'View', shortcut: 'Ctrl+-', run: () => model.zoomBy(0.8) },

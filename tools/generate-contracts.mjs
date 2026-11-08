@@ -158,7 +158,7 @@ function emitCs() {
 // Only what the page validates at runtime: whole documents and requests, and each operation (for precise error messages).
 const VALIDATED = [
   'AppPreferences', 'CapturedDocumentDefaults', 'DiagramDocument', 'MutationRequest', 'ScriptRequest', 'UndoRequest', 'RequestEnvelope', 'Operation',
-  'CreateShape', 'CreateText', 'CreateImage', 'CreateConnector', 'Set', 'Move', 'Resize', 'Rotate', 'Delete', 'RegisterAsset', 'SetPage',
+  'CreateShape', 'CreateText', 'CreateImage', 'CreateConnector', 'Set', 'Move', 'Resize', 'Rotate', 'Delete', 'RegisterAsset', 'SetPage', 'SetRoutingDefaults', 'Beautify',
   'Duplicate', 'Group', 'Ungroup', 'Align', 'Distribute', 'SetGap', 'Reorder', 'AddPage', 'ReorderPage', 'DuplicatePage', 'DeletePage',
   'AddLayer', 'SetLayer', 'AssignLayers', 'DeleteLayer', 'SetAsset', 'RemoveAsset', 'ReplaceAsset', 'Contain',
   'Reroute', 'MoveSegment', 'PinSegment',

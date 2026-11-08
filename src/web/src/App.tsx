@@ -26,6 +26,8 @@ import { PreferencesDialog } from './components/PreferencesDialog';
 import { HelpDialogs } from './components/HelpDialogs';
 import { ConnectDialog } from './components/ConnectDialog';
 import { FileIngressQueue } from './components/FileIngressQueue';
+import { BeautifyDialog } from './components/BeautifyDialog';
+import { RoutingDefaultsDialog } from './components/RoutingDefaultsDialog';
 
 const typing = (t: EventTarget | null) =>
   t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || (t instanceof HTMLElement && t.isContentEditable);
@@ -35,7 +37,7 @@ function useShortcuts(ws: WorkspaceModel) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const model = ws.active;
-      if (ws.preferences.dialogOpen) return;
+      if (ws.preferences.dialogOpen || ws.tabs.some(t => t.beautifyPrompt || t.routingDefaultsOpen)) return;
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); if (!ws.recentPrompt && !ws.tabs.some(t => t.newDocument.prompt || t.closePrompt || t.exportPrompt || t.printPrompt || t.report || t.files.prompt || t.connectPrompt)) ws.help.toggle('palette'); return; }
       if (ws.help.panel) return; // a Help panel is up: it takes the keys
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase()==='f') {
@@ -112,6 +114,7 @@ export function App({ ws }: { ws: WorkspaceModel }) {
       {!ws.tabs.some(t=>t.files.prompt) && <RecoveryDialog model={holder} onRecover={id => void ws.restoreOrphan(holder, id)} />}
       {asking && !ws.tabs.some(t=>t.files.prompt) && <CloseDialog model={asking} />}
       <FileConflictDialog model={ws.tabs.find(t=>t.files.prompt?.source==='save') ?? ws.tabs.find(t=>t.files.prompt) ?? model} />
+      {ws.tabs.filter(t => t.beautifyPrompt && !ws.tabs.some(x => x.files.prompt || x.newDocument.prompt || x.closePrompt || x.printPrompt || x.exportPrompt)).slice(0,1).map(t => <BeautifyDialog key={`${t.tabId}-beautify`} model={t} />)}
       {ws.tabs.filter(t => t.newDocument.prompt).map(t => <NewDocumentDialog key={t.tabId} model={t} />)}
       {ws.tabs.filter(t=>t.exportPrompt && !ws.tabs.some(x=>x.files.prompt) && !asking && !holder.recoveryReport && !holder.recoveryOffers.length && !ws.tabs.some(x=>x.newDocument.prompt)).slice(0,1).map(t=><ExportImageDialog key={t.tabId} model={t}/>)}
       {ws.tabs.filter(t=>t.printPrompt && !ws.tabs.some(x=>x.files.prompt) && !asking && !holder.recoveryReport && !holder.recoveryOffers.length && !ws.tabs.some(x=>x.newDocument.prompt)).slice(0,1).map(t=><PrintPreviewDialog key={`${t.tabId}-print`} model={t}/>)}
@@ -121,6 +124,7 @@ export function App({ ws }: { ws: WorkspaceModel }) {
       <DocumentTitle model={model} />
       <StatusBar model={model} />
       <PreferencesDialog ws={ws} />
+      <RoutingDefaultsDialog model={model} />
       <FileIngressQueue ws={ws} />
     </div>
   );

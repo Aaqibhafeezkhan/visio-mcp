@@ -82,5 +82,10 @@ export function applyDiff(doc: DiagramDocument, diff: DiffBody, revision: number
     assets = next;
   }
 
-  return { ...doc, revision, pages, assets: assets as Asset[] };
+  const next = { ...doc, revision, pages, assets: assets as Asset[] };
+  if (Object.prototype.hasOwnProperty.call(diff.upserts, 'routingDefaults')) {
+    if (diff.upserts.routingDefaults === null) delete next.routingDefaults;
+    else next.routingDefaults = diff.upserts.routingDefaults;
+  }
+  return next;
 }

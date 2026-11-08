@@ -11,6 +11,32 @@ const round = (n: number): number => Math.round(n * 100) / 100;
 /** A branch of a branch needs the one before it settled first, so the pass repeats; chains are cut off here. */
 const MAX_PASSES = 8;
 
+/** Locked by itself, by an assigned layer, or by a locked group above it: the same rule the planner applies to an edit. */
+function isProtected(page: Page, el: Element): boolean {
+  const locked = (e: Element) => e.locked || e.layerIds.some(id => page.layers.find(l => l.id === id)?.locked);
+  const parentOf = (id: string) => page.elements.find(e => e.kind === 'group' && e.childIds.includes(id));
+  for (let e: Element | undefined = el; e; e = parentOf(e.id)) if (locked(e)) return true;
+  return false;
+}
+
+/**
+ * The locked connectors that follow `id` when its route changes: those joined to it, and those joined to them, and so on. Settling would
+ * move them, so a caller that must not touch locked content refuses or skips the edit instead.
+ */
+export function lockedJoinDependents(page: Page, id: string): string[] {
+  const following = new Set([id]), locked: string[] = [];
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const e of page.elements) {
+      if (!isConnector(e) || following.has(e.id)) continue;
+      if (!(following.has(e.from.join?.connectorId ?? '') || following.has(e.to.join?.connectorId ?? ''))) continue;
+      following.add(e.id); grew = true;
+      if (isProtected(page, e)) locked.push(e.id);
+    }
+  }
+  return locked.sort();
+}
+
 /** The box around a connector's ends and author waypoints, as the planner derives it. */
 function boundsOf(c: ConnectorElement, byId: ReadonlyMap<string, Element>): ConnectorElement['bounds'] {
   const end = (ep: Endpoint): Point | undefined => {

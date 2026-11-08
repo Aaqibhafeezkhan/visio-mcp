@@ -3,6 +3,7 @@ import { newDocument } from '../src/model/newDocument';
 import { createTestEngine } from './support/engine';
 import type { Element, Operation, Projection, Snapshot } from '../src/contracts/generated';
 import { ok } from '../src/model/result';
+import { buildBeautifyPreview } from '../src/editor/beautifyPreview';
 
 /** Routes as straight lines through each connector's ends and waypoints, which is all these tests need from the drawing surface. */
 function straightRoutes(snapshot: Snapshot) {
@@ -12,7 +13,7 @@ function straightRoutes(snapshot: Snapshot) {
     for (const e of page.elements) {
       if (e.kind !== 'connector') continue;
       const end = (ep: typeof e.from) => { if (ep.point) return ep.point; const b = byId.get(ep.elementId ?? '')!.bounds; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
-      connectors[e.id] = { routePoints: [end(e.from), ...e.waypoints, end(e.to)], visualBounds: { x: 0, y: 0, width: 0, height: 0 } };
+      connectors[e.id] = { routePoints: e.routing?.advisory ?? [end(e.from), ...e.waypoints, end(e.to)], visualBounds: { x: 0, y: 0, width: 0, height: 0 } };
     }
   }
   return ok({ documentId: snapshot.documentId, sessionId: snapshot.sessionId, revision: snapshot.revision, connectors, groupVisualBounds: {} } as Projection);
@@ -73,6 +74,63 @@ describe('a branch joined to a connector', () => {
     await run([{ op: 'set', target: 'bus', patch: { waypoints: [{ x: 170, y: 20 }] } }]);
     await run([branch('tap', 'bus', 0.5)]);
     expect(el('tap').to.point.y).toBeLessThan(120); // the middle of a detour through (170,20) is nowhere near the straight line
+  });
+
+  it('repositions a joined branch after Beautify commits an exact path', async () => {
+    const { t, page, run, el } = await setup();
+    await run([{ op: 'set', target: 'bus', patch: { route: 'orthogonal' } }]);
+    await run([branch('tap', 'bus', 0.5)]);
+    const busId = el('bus').id;
+    const points = [{ x: 40, y: 120 }, { x: 50, y: 120 }, { x: 50, y: 200 }, { x: 290, y: 200 }, { x: 290, y: 120 }, { x: 300, y: 120 }];
+    const result = await run([{ op: 'beautify', pageId: page, baseRevision: t.engine.revision, targets: [busId], routes: [{ id: busId, points }], includeManual: false }]);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(el('tap').to.point).toEqual({ x: 170, y: 200 });
+  });
+
+  it.each([
+    ['the branch itself', async (run: any, el: any) => run([{ op: 'set', target: 'tap', patch: { locked: true } }])],
+    ['a layer the branch is on', async (run: any, el: any) => {
+      await run([{ op: 'addLayer', name: 'Frozen layer', id: '00000000-0000-4000-8000-0000000007a1' }]);
+      await run([{ op: 'assignLayers', targets: ['tap'], layerIds: ['00000000-0000-4000-8000-0000000007a1'], mode: 'add' }]);
+      return run([{ op: 'setLayer', layerId: '00000000-0000-4000-8000-0000000007a1', patch: { locked: true } }]);
+    }],
+    ['a group the branch is in', async (run: any, el: any) => {
+      await run([{ op: 'group', targets: ['tap', 'c'], id: '00000000-0000-4000-8000-0000000007a2' }]);
+      return run([{ op: 'set', target: '00000000-0000-4000-8000-0000000007a2', patch: { locked: true } }]);
+    }],
+  ])('keeps a branch locked through %s where it is: Beautify skips the connector it joins, and a hand-made commit is refused', async (_kind, lock) => {
+    const { t, page, run, el } = await setup();
+    await run([{ op: 'set', target: 'bus', patch: { route: 'orthogonal' } }]);
+    await run([branch('tap', 'bus', 0.5)]);
+    expect((await lock(run, el)).ok).toBe(true);
+    const busId = el('bus').id;
+    const points = [{ x: 40, y: 120 }, { x: 50, y: 120 }, { x: 50, y: 200 }, { x: 290, y: 200 }, { x: 290, y: 120 }, { x: 300, y: 120 }];
+    const preview = await buildBeautifyPreview(t.store.snapshot().document, page, [busId]);
+    expect(preview.targets).toEqual([]);
+    expect(preview.skipped).toEqual([{ id: busId, reason: 'a locked connector is joined to this one' }]);
+
+    const tapBefore = JSON.stringify(el('tap')), docBefore = JSON.stringify(t.store.snapshot().document), revision = t.engine.revision;
+    const refused = await run([{ op: 'beautify', pageId: page, baseRevision: revision, targets: [busId], routes: [{ id: busId, points }], includeManual: false }]);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.details).toMatchObject({ target: busId, lockedConnectorIds: [el('tap').id] });
+    expect(JSON.stringify(el('tap'))).toBe(tapBefore);
+    expect(el('tap').to.join).toEqual({ connectorId: busId, position: 0.5 }); // still joined, still at (170,120)
+    expect(JSON.stringify(t.store.snapshot().document)).toBe(docBefore);
+    expect(t.engine.revision).toBe(revision);
+  });
+
+  it('protects a locked branch two joins down, and still lets an unlocked one follow', async () => {
+    const { t, page, run, el } = await setup();
+    await run([{ op: 'set', target: 'bus', patch: { route: 'orthogonal' } }]);
+    await run([branch('tap', 'bus', 0.5), branch('tap2', 'tap', 0.5)]);
+    const busId = el('bus').id;
+    const points = [{ x: 40, y: 120 }, { x: 50, y: 120 }, { x: 50, y: 200 }, { x: 290, y: 200 }, { x: 290, y: 120 }, { x: 300, y: 120 }];
+    expect((await run([{ op: 'set', target: 'tap2', patch: { locked: true } }])).ok).toBe(true);
+    expect((await buildBeautifyPreview(t.store.snapshot().document, page, [busId])).targets).toEqual([]);
+    expect((await run([{ op: 'set', target: 'tap2', patch: { locked: false } }])).ok).toBe(true);
+    const free = await run([{ op: 'beautify', pageId: page, baseRevision: t.engine.revision, targets: [busId], routes: [{ id: busId, points }], includeManual: false }]);
+    expect(free.ok, JSON.stringify(free)).toBe(true);
+    expect(el('tap').to.point).toEqual({ x: 170, y: 200 }); // unlocked, so it follows
   });
 
   it('can be joined by patching an existing connector, and released by giving it a point', async () => {

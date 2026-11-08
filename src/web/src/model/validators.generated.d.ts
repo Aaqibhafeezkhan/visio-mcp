@@ -20,6 +20,8 @@ export const Rotate: ValidateFn;
 export const Delete: ValidateFn;
 export const RegisterAsset: ValidateFn;
 export const SetPage: ValidateFn;
+export const SetRoutingDefaults: ValidateFn;
+export const Beautify: ValidateFn;
 export const Duplicate: ValidateFn;
 export const Group: ValidateFn;
 export const Ungroup: ValidateFn;

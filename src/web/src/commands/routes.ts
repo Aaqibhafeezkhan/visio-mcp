@@ -60,9 +60,11 @@ export function settleRoutes(before: DiagramDocument, plan: Plan): Plan {
       if (!route) continue;
       const keepsRoute = e.waypoints.length === 0; // a manual connector's route is its waypoints
       const advisory = keepsRoute ? route.points.map(p => ({ x: round(p.x), y: round(p.y) })) : undefined;
-      if (advisory ? !sameRoute(e.routing?.advisory, advisory) : e.routing?.advisory !== undefined) {
+      const clearBeautified = !!e.routing?.beautified && route.provenance !== 'beautified';
+      if ((advisory ? !sameRoute(e.routing?.advisory, advisory) : e.routing?.advisory !== undefined) || clearBeautified) {
         const routing = { ...(e.routing ?? {}) } as NonNullable<ConnectorElement['routing']>;
         if (advisory) routing.advisory = advisory; else delete routing.advisory;
+        if (clearBeautified) delete routing.beautified;
         const next: ConnectorElement = { ...e };
         if (Object.keys(routing).length) next.routing = routing; else delete next.routing;
         put(page, next);

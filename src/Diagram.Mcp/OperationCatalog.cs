@@ -54,6 +54,7 @@ internal static class OperationCatalog
         result["operation"] = operation;
         result["schema"] = schema;
         result["example"] = Examples[operation]!.DeepClone();
+        if (operation == "beautify") result["usageGuidance"] = "Beautify is an explicit, revision-pinned route update. Submit the exact previewed points only for eligible Automatic connectors; do not convert them to Manual or add waypoints. The engine validates every proposed route before changing any object and sets its engine-owned beautified marker. Omit ineligible connectors from routes and report them as skipped in the preview. Apply Beautify as the only operation in its transaction.";
         return result;
     }
 

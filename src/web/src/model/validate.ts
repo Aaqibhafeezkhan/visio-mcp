@@ -15,7 +15,7 @@ const vEnvelope = V.RequestEnvelope;
 
 const opValidators = new Map<string, ValidateFn>([
   ['CreateShape', V.CreateShape], ['CreateText', V.CreateText], ['CreateImage', V.CreateImage], ['CreateConnector', V.CreateConnector],
-  ['Set', V.Set], ['Move', V.Move], ['Resize', V.Resize], ['Rotate', V.Rotate], ['Delete', V.Delete], ['RegisterAsset', V.RegisterAsset], ['SetPage', V.SetPage],
+  ['Set', V.Set], ['Move', V.Move], ['Resize', V.Resize], ['Rotate', V.Rotate], ['Delete', V.Delete], ['RegisterAsset', V.RegisterAsset], ['SetPage', V.SetPage], ['SetRoutingDefaults', V.SetRoutingDefaults], ['Beautify', V.Beautify],
   ['Duplicate', V.Duplicate],
   ['Group', V.Group],
   ['Ungroup', V.Ungroup],
@@ -39,7 +39,7 @@ const opValidators = new Map<string, ValidateFn>([
   ['PinSegment', V.PinSegment],
   ['Contain', V.Contain],
 ]);
-const opByTag: Record<string, string> = { createShape: 'CreateShape', createText: 'CreateText', createImage: 'CreateImage', createConnector: 'CreateConnector', set: 'Set', move: 'Move', resize: 'Resize', rotate: 'Rotate', delete: 'Delete', registerAsset: 'RegisterAsset', setPage: 'SetPage',
+const opByTag: Record<string, string> = { createShape: 'CreateShape', createText: 'CreateText', createImage: 'CreateImage', createConnector: 'CreateConnector', set: 'Set', move: 'Move', resize: 'Resize', rotate: 'Rotate', delete: 'Delete', registerAsset: 'RegisterAsset', setPage: 'SetPage', setRoutingDefaults: 'SetRoutingDefaults', beautify: 'Beautify',
   duplicate: 'Duplicate',
   group: 'Group',
   ungroup: 'Ungroup',

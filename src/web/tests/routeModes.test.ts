@@ -69,6 +69,25 @@ describe('stored routes (R20)', () => {
     expect(result.routeChanges ?? []).toEqual([]);
   });
 
+  it('preserves a marked beautified route exactly across an unrelated transaction', async () => {
+    const s = await setup();
+    const document = structuredClone(s.doc());
+    const page = document.pages[0]!;
+    const connector = page.elements.find(e => e.alias === 'ab') as ConnectorElement;
+    const advisory = [
+      { x: 100, y: 130 }, { x: 200, y: 130 }, { x: 200, y: 50 },
+      { x: 600, y: 50 }, { x: 600, y: 130 }, { x: 700, y: 130 },
+    ];
+    connector.routing = { advisory, beautified: true };
+    s.t.store.commit(document);
+
+    const result = await s.ok([{ op: 'move', target: 'far', delta: { xPt: 1, yPt: 0 } }]);
+    const after = s.conn('ab');
+    expect(after.routing?.advisory).toEqual(advisory);
+    expect(after.routing?.beautified).toBe(true);
+    expect(result.routeChanges ?? []).toEqual([]);
+  });
+
   it('moving an end shape changes that connector, names it in changed and routeChanges, and undo restores the route exactly', async () => {
     const s = await setup();
     const before = canonicalSerialize(s.doc().pages);
@@ -81,6 +100,18 @@ describe('stored routes (R20)', () => {
     const undo = await s.t.engine.undo({ ...s.t.scope(), transactionId: '00000000-0000-4000-8000-0000000000aa', baseRevision: s.t.engine.revision });
     expect(undo.ok).toBe(true);
     expect(canonicalSerialize(s.doc().pages)).toBe(before);
+  });
+
+  it('clears the beautified marker when moving an endpoint makes the saved route elastic', async () => {
+    const s = await setup();
+    const document = structuredClone(s.doc());
+    const connector = document.pages[0]!.elements.find(e => e.alias === 'ab') as ConnectorElement;
+    connector.routing = { ...connector.routing!, beautified: true };
+    s.t.store.commit(document);
+
+    const result = await s.ok([{ op: 'move', target: 'b', delta: { xPt: 0, yPt: 10 } }]);
+    expect(result.routeChanges?.find(change => change.id === connector.id)?.provenance).toBe('elastic');
+    expect(s.conn('ab').routing?.beautified).toBeUndefined();
   });
 
   it('a joined branch stores the route from the settled join endpoint', async () => {

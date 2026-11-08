@@ -104,6 +104,14 @@ export function PageCanvas({ model }: { model: EditorModel }) {
           return <div key={g.id} data-testid={'guide-'+g.id} role="separator" aria-label={g.orientation+' guide'} aria-orientation={g.orientation} style={{position:'absolute',pointerEvents:'auto',cursor:horizontal?'ns-resize':'ew-resize',...(horizontal?{left:0,right:0,top:pos-3,height:7,borderTop:'1px dashed #0284c7',transform:'translateY(3px)'}:{top:0,bottom:0,left:pos-3,width:7,borderLeft:'1px dashed #0284c7',transform:'translateX(3px)'})}} />;
         })}
       </div>}
+      {model.beautifyPrompt?.preview && model.viewport && <div style={{position:'absolute',left:RULER_SIZE,top:RULER_SIZE,right:0,bottom:0,pointerEvents:'none',overflow:'hidden',zIndex:5}} data-testid="beautify-overlay">
+        <svg width="100%" height="100%" viewBox={`0 0 ${size.w} ${size.h}`} aria-label="Proposed connector routes">
+          {model.beautifyPrompt.preview.proposedRoutes.map(route => {
+            const points = route.points.map(p => `${(p.x + model.viewport!.marginPt) * model.viewport!.scale - model.viewport!.scrollLeft},${(p.y + model.viewport!.marginPt) * model.viewport!.scale - model.viewport!.scrollTop}`).join(' ');
+            return <polyline key={route.id} data-route-id={route.id} points={points} fill="none" stroke="#16a34a" strokeWidth={Math.max(2, 2 / model.viewport!.scale)} strokeDasharray={`${6 / model.viewport!.scale} ${4 / model.viewport!.scale}`} />;
+          })}
+        </svg>
+      </div>}
       <RouteDiagnostics model={model} />
       <SegmentHandles model={model} />
       <ObjectList model={model} />

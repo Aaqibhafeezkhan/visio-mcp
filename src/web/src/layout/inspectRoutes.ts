@@ -7,6 +7,8 @@ import { simplifyRoute } from './routeSegments';
 import { passesBehind } from './routingPolicy';
 import { BACKGROUND_SHARE } from './obstacleGeometry';
 import { isLaneStructure } from './swimlane';
+import { ALONGSIDE_PT, classifyRouteContacts, NEAR_PT, routeRuns, SHORT_PT } from './routeContacts';
+import type { RouteContact, RouteContactRoute, RouteRun } from './routeContacts';
 import type { RouteProvenance } from './routePlanner';
 import type { Severity } from './inspectLayout';
 
@@ -18,18 +20,10 @@ export const ROUTE_FINDING_CODES = [
   'CONNECTOR_CROSSES_SHAPE', 'CONNECTOR_CROSSES_CONTAINER', 'CONNECTOR_CROSSES_BACKGROUND', 'CONNECTOR_PASSES_OVER_SHAPE',
   'CONNECTORS_CROSS', 'CONNECTOR_JOIN', 'CONNECTOR_TOUCHES_CONNECTOR', 'CONNECTORS_OVERLAP', 'CONNECTORS_TOO_CLOSE',
   'ROUTE_SHORT_SEGMENT', 'ROUTE_REDUNDANT_VERTEX', 'ROUTE_EXCESS_BENDS', 'ROUTE_TOO_CLOSE_TO_SHAPE',
-  'UNRESOLVED_ROUTE', 'ROUTING_AVOIDANCE_VIOLATION', 'ROUTE_SIDE_PREFERENCE_RELAXED',
+  'UNRESOLVED_ROUTE', 'ROUTING_AVOIDANCE_VIOLATION', 'ROUTE_SIDE_PREFERENCE_RELAXED', 'ROUTE_REQUIRED_SIDE_UNRESOLVED',
   'UNGLUED_CONNECTOR_END', 'DANGLING_CONNECTOR',
 ] as const;
 
-/** Runs on one line closer than this are printed on top of each other. */
-export const OVERLAP_PT = 0.5;
-/** Parallel runs, or a run beside a shape, closer than this look crowded (the router keeps 8 pt). */
-export const NEAR_PT = 4;
-/** A run must lie alongside the other thing for at least this long to count as running beside it. */
-export const ALONGSIDE_PT = 10;
-/** A run shorter than this is a kink, not a deliberate jog. */
-export const SHORT_PT = 2;
 /** A kept route with this many more bends than the router would now draw has gone stale. */
 export const EXTRA_BENDS = 2;
 
@@ -43,18 +37,7 @@ export function routeModeOf(c: ConnectorElement): RouteMode {
   return c.routing?.constraints?.length ? 'guided' : 'automatic';
 }
 
-interface Run { index: number; a: Point; b: Point; axis: 'h' | 'v' | 'd'; coord: number; lo: number; hi: number; length: number }
-
-function runsOf(points: readonly Point[]): Run[] {
-  const out: Run[] = [];
-  for (let i = 0; i + 1 < points.length; i++) {
-    const a = points[i]!, b = points[i + 1]!;
-    const axis = Math.abs(a.y - b.y) <= 0.01 ? 'h' : Math.abs(a.x - b.x) <= 0.01 ? 'v' : 'd';
-    const along = axis === 'v' ? [a.y, b.y] : [a.x, b.x];
-    out.push({ index: i, a, b, axis, coord: axis === 'h' ? a.y : a.x, lo: Math.min(...along), hi: Math.max(...along), length: Math.hypot(b.x - a.x, b.y - a.y) });
-  }
-  return out;
-}
+type Run = RouteRun;
 
 const boxOf = (pts: readonly Point[], pad = 0): Bounds => {
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
@@ -62,26 +45,6 @@ const boxOf = (pts: readonly Point[], pad = 0): Bounds => {
   return { x, y, width: Math.max(...xs) + pad - x, height: Math.max(...ys) + pad - y };
 };
 const round = (v: number) => Math.round(v * 100) / 100;
-const pt = (p: Point): Point => ({ x: round(p.x), y: round(p.y) });
-
-/** Where segments a-b and c-d cross strictly inside both, clear of their ends by `margin`; null if they do not. */
-function crossing(a: Point, b: Point, c: Point, d: Point, margin: number): Point | null {
-  const r = { x: b.x - a.x, y: b.y - a.y }, s = { x: d.x - c.x, y: d.y - c.y };
-  const den = r.x * s.y - r.y * s.x;
-  if (Math.abs(den) < 1e-9) return null;
-  const t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / den, u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / den;
-  const lr = Math.hypot(r.x, r.y), ls = Math.hypot(s.x, s.y);
-  if (t * lr < margin || (1 - t) * lr < margin || u * ls < margin || (1 - u) * ls < margin) return null;
-  return { x: a.x + r.x * t, y: a.y + r.y * t };
-}
-
-/** Distance from p to the segment a-b, and whether the nearest point is inside it (clear of both ends by `margin`). */
-function onRun(p: Point, run: Run, margin: number): boolean {
-  if (run.axis === 'd') return false;
-  const across = run.axis === 'h' ? Math.abs(p.y - run.coord) : Math.abs(p.x - run.coord);
-  const along = run.axis === 'h' ? p.x : p.y;
-  return across <= OVERLAP_PT * 1.5 && along > run.lo + margin && along < run.hi - margin;
-}
 
 const contains = (outer: Bounds, inner: Bounds, tol = 0.5): boolean =>
   outer.x <= inner.x + tol && outer.y <= inner.y + tol && outer.x + outer.width >= inner.x + inner.width - tol && outer.y + outer.height >= inner.y + inner.height - tol;
@@ -113,14 +76,20 @@ export function inspectRoutes(page: Page, shown: readonly Element[], routes: Rea
     const r = routes.get(el.id);
     if (!r || r.points.length < 2) continue;
     const mode = routeModeOf(el);
-    routed.push({ el, points: r.points, runs: runsOf(r.points), mode, ...(r.provenance ? { provenance: r.provenance } : {}) });
+    routed.push({ el, points: r.points, runs: routeRuns(r.points), mode, ...(r.provenance ? { provenance: r.provenance } : {}) });
   }
   routed.sort((a, b) => (a.el.id < b.el.id ? -1 : a.el.id > b.el.id ? 1 : 0));
-  const joined = (a: ConnectorElement, b: ConnectorElement) => [a.from, a.to].some(ep => ep.join?.connectorId === b.id) || [b.from, b.to].some(ep => ep.join?.connectorId === a.id);
-  const shareEnd = (a: ConnectorElement, b: ConnectorElement) => {
-    const ends = new Set([a.from.elementId, a.to.elementId].filter(Boolean));
-    return [b.from.elementId, b.to.elementId].some(id => id && ends.has(id));
-  };
+  const contactRoutes: RouteContactRoute[] = routed.map(r => ({
+    connectorId: r.el.id, points: r.points, mode: r.mode,
+    joinConnectorIds: [...new Set([r.el.from.join?.connectorId, r.el.to.join?.connectorId].filter((id): id is string => Boolean(id)))],
+    joinedEnds: ([['from', r.el.from], ['to', r.el.to]] as const).flatMap(([end, ep]) => ep.join ? [{ connectorId: ep.join.connectorId, end }] : []),
+    ...(r.el.from.elementId ? { fromElementId: r.el.from.elementId } : {}), ...(r.el.to.elementId ? { toElementId: r.el.to.elementId } : {}),
+  }));
+  const contactPairs = new Map<string, RouteContact[]>();
+  for (const contact of classifyRouteContacts(contactRoutes)) {
+    const key = `${contact.connectorIds[0]}\0${contact.connectorIds[1]}`;
+    contactPairs.set(key, [...(contactPairs.get(key) ?? []), contact]);
+  }
 
   // ---- connector to connector
   for (let i = 0; i < routed.length; i++) {
@@ -128,15 +97,11 @@ export function inspectRoutes(page: Page, shown: readonly Element[], routes: Rea
       const A = routed[i]!, B = routed[j]!;
       if (A.mode === 'curved' || B.mode === 'curved') continue; // a curve is drawn by maxGraph from control points: its line is not known here
       const ids = [A.el.id, B.el.id];
-      if (joined(A.el, B.el)) {
-        for (const [branch, trunk] of [[A, B], [B, A]] as const) {
-          for (const [side, ep] of [['from', branch.el.from], ['to', branch.el.to]] as const) {
-            if (ep.join?.connectorId !== trunk.el.id) continue;
-            const at = side === 'from' ? branch.points[0]! : branch.points[branch.points.length - 1]!;
-            add('CONNECTOR_JOIN', 'info', [branch.el.id, trunk.el.id], boxOf([at], 2), 'The connector joins another connector here; this is a junction, not a crossing.',
-              { classification: 't_join', intended: true, branchId: branch.el.id, trunkId: trunk.el.id, end: side, point: pt(at) });
-          }
-        }
+      const pairContacts = contactPairs.get(`${A.el.id}\0${B.el.id}`) ?? [];
+      const joins = pairContacts.filter(contact => contact.classification === 't_join');
+      if (joins.length) {
+        for (const contact of joins) add('CONNECTOR_JOIN', 'info', [contact.branchId!, contact.trunkId!], boxOf([contact.point!], 2), 'The connector joins another connector here; this is a junction, not a crossing.',
+          { classification: 't_join', intended: true, branchId: contact.branchId, trunkId: contact.trunkId, end: contact.end, point: contact.point });
         continue; // joined connectors meet on purpose; they are not judged against each other (hops ignore them too)
       }
 
@@ -144,10 +109,9 @@ export function inspectRoutes(page: Page, shown: readonly Element[], routes: Rea
       const hopper = [A, B].filter(x => x.el.hops === 'arc').sort((x, y) => -compareHopOrder({ hopLevel: x.el.level ?? 0, hopOrder: x.el.zIndex }, { hopLevel: y.el.level ?? 0, hopOrder: y.el.zIndex }))[0];
       // the renderer's own rule decides which crossings get an arc (it reads only x and y, so plain points will do)
       const arcs = hopper ? hopCrossings(hopper.points as never, [(hopper === A ? B : A).points] as never, HOP_SIZE_PT).flat().map(c => c.point) : [];
-      for (const ra of A.runs) for (const rb of B.runs) {
-        const at = crossing(ra.a, ra.b, rb.a, rb.b, OVERLAP_PT);
-        if (!at) continue;
-        (arcs.some(h => Math.hypot(h.x - at.x, h.y - at.y) <= 0.5) ? hopped : points).push(pt(at));
+      for (const contact of pairContacts.filter(c => c.classification === 'crossing')) {
+        const at = contact.point!;
+        (arcs.some(h => Math.hypot(h.x - at.x, h.y - at.y) <= 0.5) ? hopped : points).push(at);
       }
       if (points.length || hopped.length) {
         const all = [...points, ...hopped];
@@ -157,36 +121,30 @@ export function inspectRoutes(page: Page, shown: readonly Element[], routes: Rea
 
       for (const [X, Y] of [[A, B], [B, A]] as const) {
         for (const [side, at] of [['from', X.points[0]!], ['to', X.points[X.points.length - 1]!]] as const) {
-          const run = Y.runs.find(r => onRun(at, r, OVERLAP_PT));
-          if (!run) continue;
+          const contact = pairContacts.find(c => c.classification === 'endpoint_contact' && c.end === side && c.point?.x === round(at.x) && c.point?.y === round(at.y) && c.connectorIds.includes(X.el.id));
+          if (!contact) continue;
+          const touchedRun = contact.connectorIds[0] === Y.el.id ? contact.segments[0] : contact.segments[1];
           add('CONNECTOR_TOUCHES_CONNECTOR', 'warning', [X.el.id, Y.el.id], boxOf([at], 2), 'The end of one connector lies on another connector without being joined to it, so it looks like a junction that is not there.',
-            { classification: 'endpoint_contact', intended: false, end: side, point: pt(at), touchedRun: run.index });
+            { classification: 'endpoint_contact', intended: false, end: side, point: contact.point, touchedRun });
         }
       }
 
-      let overlapPt = 0, nearPt = 0, gapPt = Infinity;
-      const overlaps: Array<{ runA: number; runB: number; from: number; to: number; axis: 'h' | 'v'; at: number }> = [];
-      let near: { runA: number; runB: number; axis: 'h' | 'v'; at: number; other: number } | undefined;
-      for (const ra of A.runs) for (const rb of B.runs) {
-        if (ra.axis === 'd' || ra.axis !== rb.axis) continue;
-        const from = Math.max(ra.lo, rb.lo), to = Math.min(ra.hi, rb.hi), gap = Math.abs(ra.coord - rb.coord);
-        if (gap <= OVERLAP_PT && to - from >= 1) { overlapPt += to - from; overlaps.push({ runA: ra.index, runB: rb.index, from: round(from), to: round(to), axis: ra.axis, at: round(ra.coord) }); }
-        else if (gap > OVERLAP_PT && gap < NEAR_PT && to - from >= ALONGSIDE_PT) {
-          nearPt += to - from;
-          if (gap < gapPt) { gapPt = gap; near = { runA: ra.index, runB: rb.index, axis: ra.axis, at: round(ra.coord), other: round(rb.coord) }; }
-        }
-      }
+      const overlapContacts = pairContacts.filter(c => c.classification === 'collinear_overlap' || c.classification === 'collinear_shared_end');
+      const overlaps = overlapContacts.map(c => ({ runA: c.segments[0], runB: c.segments[1], from: c.overlap!.from, to: c.overlap!.to, axis: c.overlap!.axis, at: c.overlap!.at }));
+      const overlapPt = overlapContacts.reduce((sum, contact) => sum + contact.overlap!.length, 0);
       if (overlaps.length) {
-        const shared = shareEnd(A.el, B.el);
+        const shared = overlapContacts.some(contact => contact.classification === 'collinear_shared_end');
         const spans = overlaps.flatMap(o => o.axis === 'h' ? [{ x: o.from, y: o.at }, { x: o.to, y: o.at }] : [{ x: o.at, y: o.from }, { x: o.at, y: o.to }]);
         add('CONNECTORS_OVERLAP', 'warning', ids, boxOf(spans, 2), shared ? 'The connectors share an end and are drawn on top of each other along the way, so they read as one line.' : 'The connectors are drawn on top of each other along the way, so they read as one line.',
           { classification: shared ? 'collinear_shared_end' : 'collinear_overlap', intended: false, overlapPt: round(overlapPt), overlaps });
       }
+      const near = pairContacts.find(c => c.classification === 'parallel_near_miss');
       if (near) {
         const mover = A.mode === 'automatic' || A.mode === 'guided' ? A : B;
-        const run = mover === A ? near.runA : near.runB, from = mover === A ? near.at : near.other, to = mover === A ? near.other : near.at;
-        add('CONNECTORS_TOO_CLOSE', 'info', ids, boxOf([A.runs[near.runA]!.a, A.runs[near.runA]!.b, B.runs[near.runB]!.a, B.runs[near.runB]!.b], 2), 'Two connectors run side by side very close together.',
-          { classification: 'parallel_near_miss', intended: false, gapPt: round(gapPt), alongsidePt: round(nearPt), suggestion: { action: 'move_run', elementId: mover.el.id, segment: run, to: round(from + Math.sign(from - to || 1) * 8) } });
+        const [runA, runB] = near.segments, ra = A.runs[runA]!, rb = B.runs[runB]!;
+        const run = mover === A ? runA : runB, from = mover === A ? ra.coord : rb.coord, to = mover === A ? rb.coord : ra.coord;
+        add('CONNECTORS_TOO_CLOSE', 'info', ids, boxOf([ra.a, ra.b, rb.a, rb.b], 2), 'Two connectors run side by side very close together.',
+          { classification: 'parallel_near_miss', intended: false, gapPt: near.gapPt, alongsidePt: near.alongsidePt, suggestion: { action: 'move_run', elementId: mover.el.id, segment: run, to: round(from + Math.sign(from - to || 1) * 8) } });
       }
     }
   }

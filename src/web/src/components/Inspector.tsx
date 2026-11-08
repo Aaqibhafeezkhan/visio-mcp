@@ -12,7 +12,7 @@ const round = (v: number) => Math.round(v * 1000) / 1000;
 const FONT_FAMILIES = ['Segoe UI', 'Arial', 'Calibri', 'Consolas', 'Times New Roman'];
 
 /** A field that edits locally and commits one transaction on Enter or blur, so typing never makes a revision per keystroke. */
-function NumberField({ label, value, onCommit, testId, step = 'any', min }: { label: string; value: number; onCommit: (v: number) => void; testId: string; step?: string; min?: number }) {
+function NumberField({ label, value, onCommit, testId, step = 'any', min, max }: { label: string; value: number; onCommit: (v: number) => void; testId: string; step?: string; min?: number; max?: number }) {
   const [text, setText] = useState(String(round(value)));
   useEffect(() => setText(String(round(value))), [value]);
   const commit = () => {
@@ -23,7 +23,7 @@ function NumberField({ label, value, onCommit, testId, step = 'any', min }: { la
   return (
     <label className="field">
       <span>{label}</span>
-      <input type="number" value={text} step={step} min={min} data-testid={testId}
+      <input type="number" value={text} step={step} min={min} max={max} data-testid={testId}
         onChange={e => setText(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
     </label>
   );
@@ -120,6 +120,30 @@ function RoutingPolicyFields({ policy, hasText, setPolicy, includeObstacle }: {
   );
 }
 
+function ConnectorRoutingFields({ connector, set }: { connector: ConnectorElement; set: (patch: Record<string, unknown>) => void }) {
+  const setPolicy = (patch: Partial<RoutingPolicy & { crossing: 'avoid' | 'allow'; priority: number }>) => set({ routingPolicy: { ...(connector.routingPolicy ?? {}), ...patch } });
+  const sideField = (name: 'from' | 'to', label: string) => {
+    const endpoint = connector[name];
+    return <label className="field" key={name}><span>{label} required side</span>
+      <select aria-label={`${label} required side`} data-testid={`field-required-side-${name}`} disabled={!endpoint.elementId}
+        value={endpoint.requiredSide ?? ''} onChange={e => set({ [name]: { ...endpoint, requiredSide: e.target.value || null } })}>
+        <option value="">Automatic</option><option value="north">North</option><option value="east">East</option><option value="south">South</option><option value="west">West</option>
+      </select>
+    </label>;
+  };
+  return <section>
+    <h3>Connector routing</h3>
+    <label className="field"><span>Crossing policy</span>
+      <select data-testid="field-crossing-policy" value={connector.routingPolicy?.crossing ?? ''} onChange={e => setPolicy(e.target.value ? { crossing: e.target.value as 'avoid' | 'allow' } : { crossing: undefined })}>
+        <option value="">Use document default</option><option value="avoid">Avoid crossings</option><option value="allow">Allow crossings</option>
+      </select>
+    </label>
+    <NumberField label="Beautify priority" testId="field-route-priority" value={connector.routingPolicy?.priority ?? 0} min={-100} max={100} step="1" onCommit={v => setPolicy({ priority: Math.max(-100, Math.min(100, Math.round(v))) })} />
+    {sideField('from', 'Start')}{sideField('to', 'End')}
+    <small>Crossing policy and priority affect explicit Beautify only. Required sides constrain routing.</small>
+  </section>;
+}
+
 export function Inspector({ model }: { model: EditorModel }) {
   useModel(model);
   const els = model.selectedElements();
@@ -201,7 +225,7 @@ export function Inspector({ model }: { model: EditorModel }) {
       )}
 
       {el.kind === 'shape' && <ShapeStyle model={model} el={el} set={set} />}
-      {el.kind === 'connector' && <ConnectorStyle el={el} set={set} model={model} />}
+      {el.kind === 'connector' && <><ConnectorStyle el={el} set={set} model={model} /><ConnectorRoutingFields connector={el} set={set} /></>}
       {(el.kind === 'shape' || el.kind === 'text' || el.kind === 'connector') && (
         <RoutingPolicyFields policy={el.routingPolicy} hasText={Boolean(text?.value.trim())} includeObstacle={el.kind !== 'connector'}
           setPolicy={patch => set({ routingPolicy: { ...(el.routingPolicy ?? {}), ...patch } })} />

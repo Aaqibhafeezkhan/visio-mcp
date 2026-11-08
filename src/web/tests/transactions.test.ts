@@ -40,6 +40,51 @@ describe('incremental commit and rollback', () => {
     expect(store.snapshot().document.pages[0]!.elements.find(e => e.id === connectorId)).not.toHaveProperty('routingPolicy');
   });
 
+  it('routing_defaults_are_one_atomic_document_diff_and_do_not_reroute_ordinary_edits', async () => {
+    const { engine, store, request, ids } = createTestEngine();
+    const connectorId = '00000000-0000-4000-8000-000000000f24';
+    const created = await engine.execute(request([{ op: 'createConnector', id: connectorId, from: { elementId: ids.shapes[0]!, glue: 'dynamic' }, to: { elementId: ids.shapes[1]!, glue: 'dynamic' }, route: 'orthogonal' }]), 'mcp');
+    expect(created.ok).toBe(true);
+    const configured = await engine.execute(request([{ op: 'setRoutingDefaults', crossing: 'allow' }]), 'mcp');
+    expect(configured.ok).toBe(true);
+    expect(store.snapshot().document.routingDefaults).toEqual({ crossing: 'allow' });
+    if (configured.ok) expect(configured.value.changed).toEqual([]);
+    const beforeEdit = store.snapshot();
+    const edited = await engine.execute(request([{ op: 'set', target: ids.shape, patch: { name: 'renamed' } }]), 'mcp');
+    expect(edited.ok).toBe(true);
+    expect(store.snapshot().document.pages[0]!.elements.find(e => e.id === connectorId)).toEqual(beforeEdit.document.pages[0]!.elements.find(e => e.id === connectorId));
+    const undone = await engine.undo({ ...engine.scope(), transactionId: '00000000-0000-4000-8000-000000000f25', baseRevision: engine.revision });
+    expect(undone.ok).toBe(true);
+    expect(store.snapshot().document.routingDefaults).toEqual({ crossing: 'allow' });
+    const defaultsUndone = await engine.undo({ ...engine.scope(), transactionId: '00000000-0000-4000-8000-000000000f27', baseRevision: engine.revision });
+    expect(defaultsUndone.ok).toBe(true);
+    expect(store.snapshot().document).not.toHaveProperty('routingDefaults');
+    const defaultsRedone = await engine.redo({ ...engine.scope(), transactionId: '00000000-0000-4000-8000-000000000f28', baseRevision: engine.revision });
+    expect(defaultsRedone.ok).toBe(true);
+    expect(store.snapshot().document.routingDefaults).toEqual({ crossing: 'allow' });
+  });
+
+  it('rejects_connector_crossing_policy_on_non_connector_and_static_required_side_conflicts', async () => {
+    const { engine, request, ids } = createTestEngine();
+    const invalidPolicy = await engine.execute(request([{ op: 'set', target: ids.shape, patch: { routingPolicy: { crossing: 'allow' } } }]), 'mcp');
+    expect(invalidPolicy.ok).toBe(false);
+    if (!invalidPolicy.ok) expect(invalidPolicy.error.code).toBe('invalid_request');
+    const conflict = await engine.execute(request([{ op: 'createConnector', id: '00000000-0000-4000-8000-000000000f26', from: { elementId: ids.shapes[0]!, glue: 'static', port: 'east', requiredSide: 'north' }, to: { elementId: ids.shapes[1]!, glue: 'dynamic' }, route: 'orthogonal' }]), 'mcp');
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) expect(conflict.error.details).toMatchObject({ reason: 'routing_side_conflict', connectorId: '00000000-0000-4000-8000-000000000f26', endpoint: 'from' });
+  });
+
+  it('reports a general routing failure when hard obstacles block every required-side alternative', async () => {
+    const { engine, request, ids } = createTestEngine();
+    const blocked = await engine.execute(request([
+      { op: 'createShape', id: '00000000-0000-4000-8000-000000000f29', bounds: { x: 0, y: 0, width: 841, height: 595 } },
+      { op: 'set', target: '00000000-0000-4000-8000-000000000f29', patch: { routingPolicy: { obstacle: 'forbidden' } } },
+      { op: 'createConnector', id: '00000000-0000-4000-8000-000000000f30', from: { elementId: ids.shapes[0]!, glue: 'dynamic', requiredSide: 'north' }, to: { elementId: ids.shapes[1]!, glue: 'dynamic' }, route: 'orthogonal' },
+    ]), 'mcp');
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.error.details?.reason).toBe('routing_policy_unresolved');
+  });
+
   it('one_logo_patch_changes_one_object_and_leaves_19_byte_identical', async () => {
     const { engine, store, request, ids } = createTestEngine();
     const before = store.snapshot();

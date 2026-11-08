@@ -119,6 +119,20 @@ public sealed record RoutingPolicy
     [JsonPropertyName("text")] public string? Text { get; init; }
 }
 
+public sealed record ConnectorRoutingPolicy
+{
+    [JsonPropertyName("obstacle")] public string? Obstacle { get; init; }
+    [JsonPropertyName("clearancePt")] public double? ClearancePt { get; init; }
+    [JsonPropertyName("text")] public string? Text { get; init; }
+    [JsonPropertyName("crossing")] public string? Crossing { get; init; }
+    [JsonPropertyName("priority")] public int? Priority { get; init; }
+}
+
+public sealed record RoutingDefaults
+{
+    [JsonPropertyName("crossing")] public string? Crossing { get; init; }
+}
+
 public sealed record TextInsets
 {
     [JsonPropertyName("top")] public required double Top { get; init; }
@@ -189,6 +203,7 @@ public sealed record Endpoint
     [JsonPropertyName("point")] public Point? Point { get; init; }
     [JsonPropertyName("glue")] public required string Glue { get; init; }
     [JsonPropertyName("preferredSide")] public string? PreferredSide { get; init; }
+    [JsonPropertyName("requiredSide")] public string? RequiredSide { get; init; }
     [JsonPropertyName("join")] public Join? Join { get; init; }
 }
 
@@ -270,7 +285,7 @@ public sealed record ConnectorElement : Element
     [JsonPropertyName("bounds")] public required Bounds Bounds { get; init; }
     [JsonPropertyName("rotationDeg")] public required double RotationDeg { get; init; }
     [JsonPropertyName("metadata")] public required IReadOnlyDictionary<string, string> Metadata { get; init; }
-    [JsonPropertyName("routingPolicy")] public RoutingPolicy? RoutingPolicy { get; init; }
+    [JsonPropertyName("routingPolicy")] public ConnectorRoutingPolicy? RoutingPolicy { get; init; }
     [JsonPropertyName("from")] public required Endpoint From { get; init; }
     [JsonPropertyName("to")] public required Endpoint To { get; init; }
     [JsonPropertyName("route")] public required string Route { get; init; }
@@ -341,6 +356,7 @@ public sealed record DiagramDocument
     [JsonPropertyName("pages")] public required IReadOnlyList<Page> Pages { get; init; }
     [JsonPropertyName("assets")] public required IReadOnlyList<Asset> Assets { get; init; }
     [JsonPropertyName("metadata")] public required IReadOnlyDictionary<string, string> Metadata { get; init; }
+    [JsonPropertyName("routingDefaults")] public RoutingDefaults? RoutingDefaults { get; init; }
     [JsonPropertyName("source")] public DocumentSource? Source { get; init; }
 }
 
@@ -416,7 +432,7 @@ public sealed record ElementPatch
     [JsonPropertyName("style")] public StylePatch? Style { get; init; }
     [JsonPropertyName("text")] public TextBlockPatch? Text { get; init; }
     [JsonPropertyName("geometry")] public GeometryPatch? Geometry { get; init; }
-    [JsonPropertyName("routingPolicy")] public RoutingPolicy? RoutingPolicy { get; init; }
+    [JsonPropertyName("routingPolicy")] public ConnectorRoutingPolicy? RoutingPolicy { get; init; }
     [JsonPropertyName("assetId")] public string? AssetId { get; init; }
     [JsonPropertyName("fit")] public string? Fit { get; init; }
     [JsonPropertyName("opacity")] public double? Opacity { get; init; }
@@ -527,6 +543,7 @@ public sealed record EndpointInput
     [JsonPropertyName("point")] public Point? Point { get; init; }
     [JsonPropertyName("glue")] public required string Glue { get; init; }
     [JsonPropertyName("preferredSide")] public string? PreferredSide { get; init; }
+    [JsonPropertyName("requiredSide")] public string? RequiredSide { get; init; }
     [JsonPropertyName("join")] public JoinInput? Join { get; init; }
 }
 
@@ -598,6 +615,20 @@ public sealed record SetPageOp : Operation
     [JsonPropertyName("patch")] public required PagePatch Patch { get; init; }
 }
 
+public sealed record SetRoutingDefaultsOp : Operation
+{
+    [JsonPropertyName("crossing")] public required string Crossing { get; init; }
+}
+
+public sealed record BeautifyOp : Operation
+{
+    [JsonPropertyName("baseRevision")] public required int BaseRevision { get; init; }
+    [JsonPropertyName("pageId")] public required string PageId { get; init; }
+    [JsonPropertyName("targets")] public required IReadOnlyList<string> Targets { get; init; }
+    [JsonPropertyName("includeManual")] public bool? IncludeManual { get; init; }
+    [JsonPropertyName("routes")] public required IReadOnlyList<JsonObject> Routes { get; init; }
+}
+
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "op")]
 [JsonDerivedType(typeof(CreateShapeOp), "createShape")]
 [JsonDerivedType(typeof(CreateTextOp), "createText")]
@@ -610,6 +641,8 @@ public sealed record SetPageOp : Operation
 [JsonDerivedType(typeof(DeleteOp), "delete")]
 [JsonDerivedType(typeof(RegisterAssetOp), "registerAsset")]
 [JsonDerivedType(typeof(SetPageOp), "setPage")]
+[JsonDerivedType(typeof(SetRoutingDefaultsOp), "setRoutingDefaults")]
+[JsonDerivedType(typeof(BeautifyOp), "beautify")]
 [JsonDerivedType(typeof(DuplicateOp), "duplicate")]
 [JsonDerivedType(typeof(GroupOp), "group")]
 [JsonDerivedType(typeof(UngroupOp), "ungroup")]
@@ -985,6 +1018,7 @@ public sealed record DiffUpserts
     [JsonPropertyName("pages")] public required IReadOnlyList<PageUpsert> Pages { get; init; }
     [JsonPropertyName("layers")] public required IReadOnlyList<LayerUpsert> Layers { get; init; }
     [JsonPropertyName("assets")] public required IReadOnlyList<Asset> Assets { get; init; }
+    [JsonPropertyName("routingDefaults")] public JsonObject? RoutingDefaults { get; init; }
 }
 
 public sealed record DiffDeletes

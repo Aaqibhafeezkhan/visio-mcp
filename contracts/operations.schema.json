@@ -324,7 +324,7 @@
         "geometry": {
           "$ref": "#/$defs/GeometryPatch"
         },
-        "routingPolicy": { "$ref": "document.schema.json#/$defs/RoutingPolicy" },
+        "routingPolicy": { "$ref": "document.schema.json#/$defs/ConnectorRoutingPolicy" },
         "assetId": {
           "type": "string",
           "minLength": 1,
@@ -826,6 +826,7 @@
     "EndpointInput": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [{ "if": { "required": ["requiredSide"], "properties": { "requiredSide": { "type": "string" } } }, "then": { "required": ["elementId"], "properties": { "glue": { "enum": ["dynamic", "static"] } } } }],
       "required": [
         "glue"
       ],
@@ -853,6 +854,11 @@
           "type": ["string", "null"],
           "enum": ["north", "east", "south", "west", null],
           "description": "R22. Shape-local soft preference for a dynamic endpoint; null clears the preference."
+        },
+        "requiredSide": {
+          "type": ["string", "null"],
+          "enum": ["north", "east", "south", "west", null],
+          "description": "R24. Required shape-local side for this endpoint; null clears the constraint."
         },
         "join": {
           "$ref": "#/$defs/JoinInput"
@@ -1095,6 +1101,37 @@
         }
       }
     },
+    "SetRoutingDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "crossing"],
+      "properties": {
+        "op": { "const": "setRoutingDefaults" },
+        "crossing": { "type": ["string", "null"], "enum": ["avoid", "allow", null] }
+      }
+    },
+    "Beautify": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "baseRevision", "pageId", "targets", "routes"],
+      "properties": {
+        "op": { "const": "beautify" },
+        "baseRevision": { "type": "integer", "minimum": 0 },
+        "pageId": { "$ref": "document.schema.json#/$defs/Uuid" },
+        "targets": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "document.schema.json#/$defs/Uuid" } },
+        "includeManual": { "type": "boolean", "default": false },
+        "routes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "points"],
+            "properties": {
+              "id": { "$ref": "document.schema.json#/$defs/Uuid" },
+              "points": { "type": "array", "minItems": 2, "maxItems": 258, "items": { "$ref": "document.schema.json#/$defs/Point" } }
+            }
+          }
+        }
+      }
+    },
     "Operation": {
       "oneOf": [
         {
@@ -1129,6 +1166,12 @@
         },
         {
           "$ref": "#/$defs/SetPage"
+        },
+        {
+          "$ref": "#/$defs/SetRoutingDefaults"
+        },
+        {
+          "$ref": "#/$defs/Beautify"
         },
         {
           "$ref": "#/$defs/Duplicate"

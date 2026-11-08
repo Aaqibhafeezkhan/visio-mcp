@@ -89,6 +89,11 @@ describe('route diagnostics (R26): the shape of a route', () => {
     expect(one(inspect([conn('f', free(0, 100), free(300, 100))], { f: flat }), 'ROUTE_REDUNDANT_VERTEX').evidence).toMatchObject({ vertexIndices: [1, 2], suggestion: { action: 'remove_vertices', vertexIndices: [1, 2] } });
   });
 
+  it('reports the engine-owned beautified route provenance', () => {
+    const kink = [{ x: 0, y: 100 }, { x: 150, y: 100 }, { x: 150, y: 101 }, { x: 300, y: 101 }];
+    expect(one(inspect([conn('b', free(0, 100), free(300, 101))], { b: kink }, { b: 'beautified' }), 'ROUTE_SHORT_SEGMENT').evidence.provenance).toBe('beautified');
+  });
+
   it('a manual or frozen route is drawn that way on purpose and its shape is not judged', () => {
     const manual = conn('m', free(0, 100), free(300, 101), { waypoints: [{ x: 150, y: 100 }, { x: 150, y: 101 }] });
     const frozen = conn('z', free(0, 300), free(300, 300), { routing: { mode: 'frozen' } });

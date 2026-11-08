@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Xml;
 using System.Xml.Linq;
 using Diagram.Core.Contracts;
@@ -112,6 +113,8 @@ public sealed class NativeVsdxExporter : IVsdxExporter
             var parts = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
             var pageDocs = new List<(string Name, XDocument Page, List<(string RelId, string Target)> Rels)>();
             var pagesXml = new XElement(V + "Pages", new XAttribute(XNamespace.Xmlns + "r", R.NamespaceName), new XAttribute(XNamespace.Xml + "space", "preserve"));
+            if (doc.RoutingDefaults?.Crossing is not null)
+                Warn("ROUTING_POLICY_NOT_NATIVE", "Visio does not preserve the document's routingDefaults.crossing setting; it remains available in the source editor document.", action: "routingDefaults.crossing", severity: "info");
             for (var pi = 0; pi < doc.Pages.Count; pi++)
             {
                 var pb = new PageBuilder(this, doc.Pages[pi], pi);
@@ -243,13 +246,18 @@ public sealed class NativeVsdxExporter : IVsdxExporter
                 {
                     ShapeElement shape => shape.RoutingPolicy,
                     TextElement text => text.RoutingPolicy,
-                    ConnectorElement connector => connector.RoutingPolicy,
+                    ConnectorElement connector when connector.RoutingPolicy is { } connectorPolicy => new RoutingPolicy
+                    {
+                        Obstacle = connectorPolicy.Obstacle,
+                        ClearancePt = connectorPolicy.ClearancePt,
+                        Text = connectorPolicy.Text,
+                    },
                     _ => null,
                 };
                 if ((Common(element).Level ?? 0) != 0)
                     Warn("level_not_native", "Visio has no native stacking level; the AgentLevel user cell preserves this level when the file is reopened in the editor.", id, "AgentLevel", "info");
                 void Unsupported(string field) => Warn("ROUTING_POLICY_NOT_NATIVE",
-                    $"Visio does not preserve the editor's {field} routing policy; it remains available when the file is reopened in the editor.",
+                    $"Visio does not preserve the editor's {field} routing setting; exported connector geometry remains visible, but this metadata is not carried by Visio.",
                     id, field, "info");
 
                 if (policy?.Obstacle is not null) Unsupported("routingPolicy.obstacle");
@@ -257,8 +265,13 @@ public sealed class NativeVsdxExporter : IVsdxExporter
                 if (policy?.Text is not null) Unsupported("routingPolicy.text");
                 if (element is ConnectorElement c)
                 {
+                    if (c.RoutingPolicy?.Crossing is not null) Unsupported("routingPolicy.crossing");
+                    if (c.RoutingPolicy?.Priority is not null) Unsupported("routingPolicy.priority");
+                    if (c.Routing?["beautified"]?.GetValue<bool>() == true) Unsupported("routing.beautified");
                     if (c.From.Glue == "dynamic" && c.From.PreferredSide is not null) Unsupported("from.preferredSide");
                     if (c.To.Glue == "dynamic" && c.To.PreferredSide is not null) Unsupported("to.preferredSide");
+                    if (c.From.RequiredSide is not null) Unsupported("from.requiredSide");
+                    if (c.To.RequiredSide is not null) Unsupported("to.requiredSide");
                 }
             }
 
@@ -834,6 +847,8 @@ public sealed class NativeVsdxExporter : IVsdxExporter
                 Flags(shape, c.Locked);
                 if (c.Label is { } label) { AddText(shape, label, c.Id); }
                 var cx = new List<XElement> { UserRow("AgentRoute", c.Route) };
+                if (c.Routing?["advisory"] is JsonArray advisory)
+                    cx.Add(UserRow("AgentAdvisory", advisory.ToJsonString()));
                 if (c.LabelAnchor is { } la)
                 {
                     cx.Add(UserRow("AgentLabelAnchor", JsonSerializer.Serialize(new { position = la.Position, offsetPt = la.OffsetPt })));

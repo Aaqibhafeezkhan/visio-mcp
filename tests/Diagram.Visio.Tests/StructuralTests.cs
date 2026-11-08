@@ -144,6 +144,64 @@ public class StructuralTests
     }
 
     [Fact]
+    public void R24RoutingMetadataLossIsReportedAndAutomaticGeometryRoundTrips()
+    {
+        var points = new[] { new { x = 100.0, y = 80.0 }, new { x = 100.0, y = 150.0 }, new { x = 350.0, y = 150.0 }, new { x = 350.0, y = 340.0 } };
+        var elements = new object[]
+        {
+            Doc.Shape(1, 50, 80, 100, 60), Doc.Shape(2, 300, 280, 100, 60),
+            Doc.Connector(10,
+                new { elementId = Doc.Id(1), glue = "dynamic", requiredSide = "north" },
+                new { elementId = Doc.Id(2), glue = "dynamic", requiredSide = "south" },
+                "orthogonal",
+                new { routingPolicy = new { crossing = "allow", priority = 25 }, routing = new { advisory = points, beautified = true } }),
+        };
+        var documentJson = JsonSerializer.SerializeToNode(Doc.Make([Doc.Page(elements)]), ContractJson.Options)!.AsObject();
+        documentJson["routingDefaults"] = new JsonObject { ["crossing"] = "avoid" };
+        var document = documentJson.Deserialize<DiagramDocument>(ContractJson.Options)!;
+        var routes = new Dictionary<string, JsonObject> { [Doc.Id(10)] = Doc.Route(points.Select(p => (p.x, p.y)).ToArray()) };
+
+        var (exported, imported) = RT.Trip(Doc.Snapshot(document, routes));
+        var diagnostics = exported.Diagnostics.Where(d => d.Code == "ROUTING_POLICY_NOT_NATIVE").ToList();
+        var expectedActions = new[]
+        {
+            "routingDefaults.crossing", "routingPolicy.crossing", "routingPolicy.priority",
+            "from.requiredSide", "to.requiredSide", "routing.beautified",
+        };
+        Assert.Equal(expectedActions.OrderBy(x => x), diagnostics.Select(d => d.Action).OrderBy(x => x));
+        Assert.All(diagnostics, d => Assert.Equal("info", d.Severity));
+
+        var shape = ShapeByAgentId(exported.Package, Doc.Id(10));
+        var rows = shape.Descendants().Where(e => e.Name.LocalName == "Row" && ((string?)e.Attribute("T") is "MoveTo" or "LineTo")).ToList();
+        Assert.Equal(points.Length, rows.Count);
+        double Inches(string name) => double.Parse(Cell(shape, name)!, System.Globalization.CultureInfo.InvariantCulture);
+        var originX = (Inches("PinX") - Inches("LocPinX")) * 72;
+        var originY = (Inches("PinY") - Inches("LocPinY")) * 72;
+        const double pageHeightPt = 595.2755905511812;
+        for (var i = 0; i < points.Length; i++)
+        {
+            double Local(string name) => double.Parse(rows[i].Elements().First(c => c.Name.LocalName == "Cell" && (string?)c.Attribute("N") == name).Attribute("V")!.Value, System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(points[i].x, originX + Local("X") * 72, 6);
+            Assert.Equal(points[i].y, pageHeightPt - (originY + Local("Y") * 72), 6);
+        }
+
+        var importedConnector = RT.El(imported.Document, Doc.Id(10));
+        Assert.Empty(importedConnector["waypoints"]!.AsArray()); // it remains Automatic, not converted to Manual
+        var advisory = importedConnector["routing"]!["advisory"]!.AsArray();
+        Assert.Equal(points.Length, advisory.Count);
+        for (var i = 0; i < points.Length; i++)
+        {
+            Assert.Equal(points[i].x, advisory[i]!["x"]!.GetValue<double>());
+            Assert.Equal(points[i].y, advisory[i]!["y"]!.GetValue<double>());
+        }
+        Assert.Null(importedConnector["routing"]!["beautified"]); // the next planner pass may apply its normal straightening rule
+        Assert.Null(importedConnector["routingPolicy"]);
+        Assert.Null(importedConnector["from"]!["requiredSide"]);
+        Assert.Null(importedConnector["to"]!["requiredSide"]);
+        Assert.Null(imported.Document.RoutingDefaults);
+    }
+
+    [Fact]
     public void OnlyAuthoredWaypointRoutesAreFixedAgainstVisioRerouting()
     {
         var wp = new[] { new { x = 200.0, y = 40.0 }, new { x = 200.0, y = 300.0 } };

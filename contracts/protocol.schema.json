@@ -379,7 +379,7 @@
       "required": ["id", "provenance"],
       "properties": {
         "id": { "$ref": "document.schema.json#/$defs/Uuid" },
-        "provenance": { "enum": ["authored", "frozen", "kept", "elastic", "repaired", "rerouted", "unresolved"] },
+        "provenance": { "enum": ["authored", "frozen", "kept", "elastic", "repaired", "rerouted", "unresolved", "beautified"] },
         "reason": { "type": "string" }
       }
     },
@@ -416,7 +416,7 @@
       "additionalProperties": false,
       "required": ["code", "severity", "message", "elementId"],
       "properties": {
-        "code": { "enum": ["UNRESOLVED_ROUTE", "ROUTING_AVOIDANCE_VIOLATION", "ROUTE_SIDE_PREFERENCE_RELAXED"] },
+        "code": { "enum": ["UNRESOLVED_ROUTE", "ROUTING_AVOIDANCE_VIOLATION", "ROUTE_SIDE_PREFERENCE_RELAXED", "ROUTE_REQUIRED_SIDE_UNRESOLVED"] },
         "severity": { "enum": ["info", "warning", "error"] },
         "message": { "type": "string", "maxLength": 4096 },
         "elementId": { "$ref": "document.schema.json#/$defs/Uuid" },
@@ -438,7 +438,7 @@
         },
         "routeProvenance": {
           "description": "R19: how the router produced an automatic orthogonal route. 'unresolved' means no clear route was found and the best available one is shown.",
-          "enum": ["authored", "frozen", "kept", "elastic", "repaired", "rerouted", "unresolved"]
+          "enum": ["authored", "frozen", "kept", "elastic", "repaired", "rerouted", "unresolved", "beautified"]
         },
         "routeReason": {
           "type": "string",
@@ -654,6 +654,12 @@
           "items": {
             "$ref": "document.schema.json#/$defs/Asset"
           }
+        },
+        "routingDefaults": {
+          "description": "R24. Atomic document-level upsert; null removes routing defaults.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": { "crossing": { "enum": ["avoid", "allow"] } }
         }
       }
     },

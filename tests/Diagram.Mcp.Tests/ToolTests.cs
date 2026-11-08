@@ -238,6 +238,13 @@ public class ToolTests
             var schema = detail["schema"]!;
             Assert.Equal(name, schema["properties"]!["op"]!["const"]!.GetValue<string>());
             Assert.Equal(name, detail["example"]!["op"]!.GetValue<string>());
+            if (name == "beautify")
+            {
+                var help = detail["usageGuidance"]!.GetValue<string>();
+                Assert.Contains("exact previewed points", help);
+                Assert.Contains("do not convert them to Manual", help);
+                Assert.Contains("engine-owned beautified marker", help);
+            }
             Assert.True(JsonNode.DeepEquals(examples[name], detail["example"]), name + " example differs from validated fixture");
             var def = canonical["$defs"]!.AsObject().First(x => x.Value?["properties"]?["op"]?["const"]?.ToString() == name).Value!;
             var actual = schema.DeepClone().AsObject(); actual.Remove("$schema"); actual.Remove("$defs");

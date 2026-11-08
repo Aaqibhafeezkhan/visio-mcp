@@ -14,7 +14,7 @@ function straightRoutes(snapshot: Snapshot) {
       if (e.kind !== 'connector') continue;
       const mid = (id?: string) => { const b = byId.get(id ?? '')!.bounds; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
       const routePoints = [mid(e.from.elementId), mid(e.to.elementId)];
-      connectors[e.id] = { routePoints, visualBounds: { x: 0, y: 0, width: 0, height: 0 } };
+      connectors[e.id] = { routePoints: e.routing?.advisory ?? routePoints, visualBounds: { x: 0, y: 0, width: 0, height: 0 } };
     }
   }
   return ok({ documentId: snapshot.documentId, sessionId: snapshot.sessionId, revision: snapshot.revision, connectors, groupVisualBounds: {} } as Projection);
@@ -85,6 +85,21 @@ describe('elements attached to a connector', () => {
     expect((await run([{ op: 'move', target: 'dot', delta: { xPt: 50, yPt: 15 } }])).ok).toBe(true);
     expect(el('dot').attachment).toMatchObject({ position: 0.6667, offsetPt: 15 });
     expect(centre('dot')).toEqual({ x: 220, y: 135 }); // exactly where it was dropped
+  });
+
+  it('repositions attached shapes and text after Beautify commits an exact path', async () => {
+    const { t, page, run, el, centre } = await setup();
+    await run([{ op: 'set', target: 'link', patch: { route: 'orthogonal' } }]);
+    await run([
+      { op: 'createShape', alias: 'tag', bounds: { x: 150, y: 110, width: 40, height: 20 }, attachment: { connector: 'link', position: 0.5 } },
+      { op: 'createText', alias: 'note', bounds: { x: 140, y: 90, width: 60, height: 20 }, text: { value: 'Note' }, attachment: { connector: 'link', position: 0.5, offsetPt: -20 } },
+    ]);
+    const connectorId = el('link').id;
+    const points = [{ x: 40, y: 120 }, { x: 50, y: 120 }, { x: 50, y: 200 }, { x: 290, y: 200 }, { x: 290, y: 120 }, { x: 300, y: 120 }];
+    const result = await run([{ op: 'beautify', pageId: page, baseRevision: t.engine.revision, targets: [connectorId], routes: [{ id: connectorId, points }], includeManual: false }]);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(centre('tag')).toEqual({ x: 170, y: 200 });
+    expect(centre('note')).toEqual({ x: 170, y: 180 });
   });
 
   it('are detached, and stay put, when their connector is deleted', async () => {

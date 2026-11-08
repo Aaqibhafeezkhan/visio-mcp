@@ -41,9 +41,10 @@ function requestsHardRoutePreflight(operations: readonly Operation[]): boolean {
     if (op.op === 'set') {
       const patch = op.patch as Record<string, unknown>;
       const policy = patch.routingPolicy as { obstacle?: string; text?: string } | undefined;
-      return policy?.obstacle === 'forbidden' || policy?.text === 'avoid' || hardEndpoint(patch.from) || hardEndpoint(patch.to);
+      const required = (value: unknown) => !!value && typeof value === 'object' && (value as { requiredSide?: unknown }).requiredSide != null;
+      return policy?.obstacle === 'forbidden' || policy?.text === 'avoid' || hardEndpoint(patch.from) || hardEndpoint(patch.to) || required(patch.from) || required(patch.to);
     }
-    if (op.op === 'createConnector') return hardEndpoint(op.from) || hardEndpoint(op.to);
+    if (op.op === 'createConnector') return hardEndpoint(op.from) || hardEndpoint(op.to) || op.from.requiredSide != null || op.to.requiredSide != null;
     return false;
   });
 }
@@ -262,15 +263,20 @@ export class CommandEngine {
     const planned = planPatch(before.document, operations, { newId, ...(pageId ? { pageId } : {}) });
     if (!planned.ok) return planned;
     const snapshotOf = (doc: DiagramDocument) => ({ ...before, revision: before.revision + 1, document: doc });
+    const exactBeautify = planned.value.exactRouteIds !== undefined; // Beautify stores exact routes; settling must not replan them
     const joined = settleJoins(before.document, planned.value, source, snapshotOf);
-    const routed = settleRoutes(before.document, joined);
-    if (requestsHardRoutePreflight(operations)) {
+    const routed = exactBeautify ? joined : settleRoutes(before.document, joined);
+    if (!exactBeautify && requestsHardRoutePreflight(operations)) {
       const existing = new Set(before.document.pages.flatMap(page => planRoutes({ elements: page.elements, layers: page.layers, pageArea: page.widthPt * page.heightPt }).routeFindings)
-        .filter(finding => finding.code === 'UNRESOLVED_ROUTE').map(finding => finding.elementId));
-      const introduced = (routed.routeFindings ?? []).filter(finding => finding.code === 'UNRESOLVED_ROUTE' && !existing.has(finding.elementId));
+        .filter(finding => finding.code === 'UNRESOLVED_ROUTE' || finding.code === 'ROUTE_REQUIRED_SIDE_UNRESOLVED')
+        .map(finding => `${finding.elementId}:${finding.code}`));
+      const introduced = (routed.routeFindings ?? []).filter(finding => (finding.code === 'UNRESOLVED_ROUTE' || finding.code === 'ROUTE_REQUIRED_SIDE_UNRESOLVED') && !existing.has(`${finding.elementId}:${finding.code}`));
       if (introduced.length) {
         return fail('invalid_request', 'the routing policy would leave one or more connectors without a clear route', {
-          details: { reason: 'routing_policy_unresolved', connectorIds: introduced.map(finding => finding.elementId).sort() },
+          details: {
+            reason: introduced.some(finding => finding.code === 'ROUTE_REQUIRED_SIDE_UNRESOLVED') ? 'required_side_unresolved' : 'routing_policy_unresolved',
+            connectorIds: introduced.map(finding => finding.elementId).sort(),
+          },
         });
       }
     }

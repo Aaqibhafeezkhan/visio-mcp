@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Element } from '../src/contracts/generated';
 import { planRoutes, routeDefects, type PlanResult } from '../src/layout/routePlanner';
-import { isClear } from '../src/layout/obstacleRoute';
+import { isClear, search, type Segment } from '../src/layout/obstacleRoute';
 import { selectObstacles, visualRect } from '../src/layout/obstacles';
 import { compile } from '../src/script/compiler';
 import { createTestEngine, sequenceIds } from './support/engine';
@@ -45,6 +45,61 @@ describe('route planner', () => {
     const next = plan(moveBy(els, 'far', 1, 0), first.routes);
     expect(next.changes).toEqual([]);
     for (const id of ['ab', 'cd']) { expect(pts(next, id)).toEqual(pts(first, id)); expect(next.routes.get(id)!.provenance).toBe('kept'); }
+  });
+
+  it('required_endpoint_side_overrides_the_soft_preference', () => {
+    const a = shape('a', 0, 100), b = shape('b', 400, 100);
+    const link = { ...conn('ab', 'a', 'b'), from: { elementId: 'a', glue: 'dynamic', preferredSide: 'east', requiredSide: 'north' } } as unknown as Element;
+    const routes = plan([a, b, link]).routes.get('ab')!.points;
+    expect(routes[0]).toEqual({ x: 50, y: 100 });
+    expect(routes[1]!.y).toBeLessThan(routes[0]!.y);
+  });
+
+  it('reports_a_distinct_finding_when_a_required_side_cannot_route', () => {
+    const a = shape('a', 100, 100), b = shape('b', 700, 100);
+    const link = { ...conn('ab', 'a', 'b'), from: { elementId: 'a', glue: 'dynamic', requiredSide: 'north' } } as unknown as Element;
+    const wall = shape('wall', 120, 65, 60, 30, { routingPolicy: { obstacle: 'forbidden' } });
+    expect(plan([a, b, wall, link]).routeFindings).toContainEqual(expect.objectContaining({ code: 'ROUTE_REQUIRED_SIDE_UNRESOLVED', elementId: 'ab' }));
+  });
+
+  it('does not blame the required side when another hard obstacle still blocks the route', () => {
+    const a = shape('a', 100, 100), b = shape('b', 700, 100);
+    const link = { ...conn('ab', 'a', 'b'), from: { elementId: 'a', glue: 'dynamic', requiredSide: 'north' } } as unknown as Element;
+    const wall = shape('wall', 0, 0, 1000, 700, { routingPolicy: { obstacle: 'forbidden' } });
+    expect(plan([a, b, wall, link]).routeFindings).toContainEqual(expect.objectContaining({ code: 'UNRESOLVED_ROUTE', elementId: 'ab' }));
+  });
+
+  it('keeps a clear beautified automatic route after an unrelated shape move, regardless of straightening hysteresis', () => {
+    const route = [{ x: 100, y: 130 }, { x: 200, y: 130 }, { x: 200, y: 50 }, { x: 600, y: 50 }, { x: 600, y: 130 }, { x: 700, y: 130 }];
+    const marked = { ...conn('ab', 'a', 'b', {}, 'east', 'west'), routing: { beautified: true, advisory: route } } as unknown as Element;
+    const els = [shape('a', 0, 100), shape('b', 700, 100), shape('far', 900, 900), marked];
+    const first = plan(els);
+    expect(pts(first, 'ab')).toEqual(route);
+    expect(first.routes.get('ab')!.provenance).toBe('beautified');
+
+    const moved = plan(moveBy(els, 'far', 1, 0), first.routes);
+    expect(pts(moved, 'ab')).toEqual(route);
+    expect(moved.routes.get('ab')!.provenance).toBe('beautified');
+    expect(moved.changes.map(change => change.id)).not.toContain('ab');
+  });
+
+  it('allows normal straightening when Visio import preserves advisory geometry but drops the Beautified marker', () => {
+    const importedAdvisory = [{ x: 100, y: 130 }, { x: 200, y: 130 }, { x: 200, y: 50 }, { x: 600, y: 50 }, { x: 600, y: 130 }, { x: 700, y: 130 }];
+    const imported = { ...conn('ab', 'a', 'b', {}, 'east', 'west'), routing: { advisory: importedAdvisory } } as unknown as Element;
+    const result = plan([shape('a', 0, 100), shape('b', 700, 100), imported]);
+    expect(pts(result, 'ab')).not.toEqual(importedAdvisory);
+    expect(pts(result, 'ab')).toEqual([{ x: 100, y: 130 }, { x: 700, y: 130 }]);
+    expect(result.routes.get('ab')!.provenance).not.toBe('beautified');
+  });
+
+  it('repairs a blocked beautified route and leaves its engine marker on the document connector', () => {
+    const route = [{ x: 100, y: 130 }, { x: 200, y: 130 }, { x: 200, y: 50 }, { x: 600, y: 50 }, { x: 600, y: 130 }, { x: 700, y: 130 }];
+    const marked = { ...conn('ab', 'a', 'b', {}, 'east', 'west'), routing: { beautified: true, advisory: route } } as unknown as Element;
+    const wall = shape('wall', 350, 30, 80, 40);
+    const next = plan([shape('a', 0, 100), shape('b', 700, 100), wall, marked]);
+    expect(next.routes.get('ab')!.provenance).toBe('repaired');
+    expect(routeDefects(pts(next, 'ab'))).toEqual([]);
+    expect((marked as never as { routing: { beautified: boolean } }).routing.beautified).toBe(true);
   });
 
   it('keeps the interior track when an end shape moves a few points, changing only the end runs', () => {
@@ -258,17 +313,79 @@ describe('route planner', () => {
   });
 });
 
+describe('aesthetic A* routing (R24)', () => {
+  const free = (id: string, from: { x: number; y: number }, to: { x: number; y: number }, advisory = [from, to]) => ({
+    id, kind: 'connector', layerIds: [], zIndex: 1, locked: false, hidden: false, bounds: { x: 0, y: 0, width: 0, height: 0 }, rotationDeg: 0, metadata: {},
+    from: { glue: 'none', point: from }, to: { glue: 'none', point: to }, route: 'orthogonal', waypoints: [], routing: { advisory },
+    style: { stroke: solid, strokeWidthPt: 1, dash: 'solid', lineCap: 'butt', lineJoin: 'miter' },
+  }) as unknown as Element;
+
+  it('beautifies a crossing at a grid vertex even when an unrelated shape adds that grid line', () => {
+    const horizontal = free('horizontal', { x: 0, y: 0 }, { x: 100, y: 0 });
+    const vertical = free('vertical', { x: 50, y: -100 }, { x: 50, y: 100 });
+    const run = (extra: Element[] = []) => planRoutes({ elements: [horizontal, vertical, ...extra], layers: [], pageArea: 1_000_000,
+      beautifyTargets: new Set(['horizontal']), costProfile: 'aesthetic' });
+    const alone = run();
+    const withGridLine = run([shape('far', 50, 200, 10, 10)]);
+    const hasCrossing = (route: readonly { x: number; y: number }[]) => route.some((p, i) => i > 0
+      && Math.abs(p.y - route[i - 1]!.y) < 1e-6 && p.y > -100 && p.y < 100
+      && Math.min(p.x, route[i - 1]!.x) < 50 && Math.max(p.x, route[i - 1]!.x) > 50);
+    expect(hasCrossing(pts(alone, 'horizontal'))).toBe(true); // establishes the original crossing at x=50, y=0
+    expect(withGridLine.routes.get('horizontal')!.provenance).toBe('beautified');
+    expect(hasCrossing(pts(withGridLine, 'horizontal'))).toBe(false);
+    expect(withGridLine.aestheticStats?.get('horizontal')?.expandedStates).toBeLessThan(80_000);
+  });
+
+  it('prefers a longer crossing-free path inside search over a shorter crossing path', () => {
+    const path = search({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 100, y: 0 }, { x: 1, y: 0 },
+      [{ x: 40, y: -20, width: 20, height: 40 }],
+      [{ a: { x: 80, y: -100 }, b: { x: 80, y: 30 }, ownerId: 'existing' } as Segment], 6, 80_000,
+      { profile: 'aesthetic', crossingsPolicy: 'avoid' });
+    expect(path).toBeDefined();
+    expect(path!.some(point => point.y > 30)).toBe(true);
+  });
+
+  it('separates a 100 pt overlapping automatic route by at least the 6 pt Beautify track', () => {
+    const free = (id: string) => ({
+      id, kind: 'connector', layerIds: [], zIndex: 1, locked: false, hidden: false, bounds: { x: 0, y: 0, width: 0, height: 0 }, rotationDeg: 0, metadata: {},
+      from: { glue: 'none', point: { x: 0, y: 0 } }, to: { glue: 'none', point: { x: 100, y: 0 } }, route: 'orthogonal', waypoints: [],
+      style: { stroke: solid, strokeWidthPt: 1, dash: 'solid', lineCap: 'butt', lineJoin: 'miter' },
+    }) as unknown as Element;
+    const result = planRoutes({ elements: [free('a'), free('b')], layers: [], pageArea: 100_000, beautifyTargets: new Set(['b']), costProfile: 'aesthetic' });
+    const candidate = pts(result, 'b');
+    expect(Math.sign(candidate[candidate.length - 2]!.x - candidate[candidate.length - 1]!.x)).toBe(-1);
+    const parallelOverlap = candidate.slice(1).map((point, index) => {
+      const previous = candidate[index]!;
+      if (Math.abs(point.y - previous.y) > 1e-6) return { offset: 0, overlap: 0 };
+      return { offset: Math.abs(point.y), overlap: Math.max(0, Math.min(100, Math.max(point.x, previous.x)) - Math.max(0, Math.min(point.x, previous.x))) };
+    });
+    expect(parallelOverlap.some(run => run.offset >= 6 && run.overlap >= 60)).toBe(true);
+    expect(result.routes.get('b')!.provenance).toBe('beautified');
+  });
+
+  it('does not relax avoid-policy shapes during Beautify searches', () => {
+    const free = (id: string) => ({
+      id, kind: 'connector', layerIds: [], zIndex: 1, locked: false, hidden: false, bounds: { x: 0, y: 0, width: 0, height: 0 }, rotationDeg: 0, metadata: {},
+      from: { glue: 'none', point: { x: 0, y: 0 } }, to: { glue: 'none', point: { x: 100, y: 0 } }, route: 'orthogonal', waypoints: [],
+      style: { stroke: solid, strokeWidthPt: 1, dash: 'solid', lineCap: 'butt', lineJoin: 'miter' },
+    }) as unknown as Element;
+    const avoid = shape('avoid', -100, -100, 500, 500, { routingPolicy: { obstacle: 'avoid' } });
+    const result = planRoutes({ elements: [avoid, free('a'), free('b')], layers: [], pageArea: 1_000_000, beautifyTargets: new Set(['b']), costProfile: 'aesthetic' });
+    expect(result.routes.get('b')!.provenance).not.toBe('beautified');
+  });
+});
+
 /** A seeded 60-shape, 60-connector diagram: the stress case from the performance targets. */
-function stress(): Element[] {
+function stress(shapeCount = 60, connectorCount = 60): Element[] {
   let s = 12345;
   const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
   const els: Element[] = [];
   const id = (p: string, n: number) => `${p}${String(n).padStart(3, '0')}`;
-  for (let i = 0; i < 60; i++) els.push(shape(id('s', i), 40 + (i % 10) * 170, 40 + Math.floor(i / 10) * 130, 100, 60));
-  for (let i = 0; i < 60; i++) {
-    const a = Math.floor(rnd() * 60);
-    let b = Math.floor(rnd() * 60);
-    if (b === a) b = (b + 1) % 60;
+  for (let i = 0; i < shapeCount; i++) els.push(shape(id('s', i), 40 + (i % 10) * 170, 40 + Math.floor(i / 10) * 130, 100, 60));
+  for (let i = 0; i < connectorCount; i++) {
+    const a = Math.floor(rnd() * shapeCount);
+    let b = Math.floor(rnd() * shapeCount);
+    if (b === a) b = (b + 1) % shapeCount;
     els.push(conn(id('c', i), id('s', a), id('s', b)));
   }
   return els;
@@ -276,6 +393,41 @@ function stress(): Element[] {
 
 describe('route planner on the 60 shape, 60 connector diagram', () => {
   const els = stress();
+  it('bounds and reports all opt-in searches in the 60/60 workload', () => {
+    const started = performance.now();
+    const targets = new Set(els.filter(e => e.kind === 'connector').map(e => e.id));
+    const result = planRoutes({ elements: els, layers: [], pageArea: 1_000_000, beautifyTargets: targets, costProfile: 'aesthetic' });
+    const stats = [...(result.aestheticStats?.values() ?? [])];
+    const maxExpanded = Math.max(0, ...stats.map(s => s.expandedStates));
+    const totalExpanded = stats.reduce((n, s) => n + s.expandedStates, 0);
+    const maxGridCells = Math.max(0, ...stats.map(s => s.gridCells));
+    const maxPeakMemoryBytes = Math.max(0, ...stats.map(s => s.peakMemoryBytes));
+    const elapsedMs = performance.now() - started;
+    console.info('R24 60/60 aesthetic stats', { searched: stats.length, maxExpanded, totalExpanded, maxGridCells, maxPeakMemoryBytes, elapsedMs: Math.round(elapsedMs) });
+    expect(result.routes.size).toBe(60);
+    expect(stats.length).toBe(60);
+    expect(maxExpanded).toBeLessThanOrEqual(80_000);
+    expect(elapsedMs).toBeLessThan(30_000);
+  }, 35_000);
+
+  it('bounds and reports every opt-in search in a denser 60/90 workload', () => {
+    const dense = stress(60, 90);
+    const started = performance.now();
+    const targets = new Set(dense.filter(e => e.kind === 'connector').map(e => e.id));
+    const result = planRoutes({ elements: dense, layers: [], pageArea: 1_000_000, beautifyTargets: targets, costProfile: 'aesthetic' });
+    const stats = [...(result.aestheticStats?.values() ?? [])];
+    const maxExpanded = Math.max(0, ...stats.map(s => s.expandedStates));
+    const totalExpanded = stats.reduce((n, s) => n + s.expandedStates, 0);
+    const maxGridCells = Math.max(0, ...stats.map(s => s.gridCells));
+    const maxPeakMemoryBytes = Math.max(0, ...stats.map(s => s.peakMemoryBytes));
+    const elapsedMs = performance.now() - started;
+    console.info('R24 60/90 aesthetic stats', { searched: stats.length, maxExpanded, totalExpanded, maxGridCells, maxPeakMemoryBytes, elapsedMs: Math.round(elapsedMs) });
+    expect(result.routes.size).toBe(90);
+    expect(stats.length).toBe(90);
+    expect(maxExpanded).toBeLessThanOrEqual(80_000);
+    expect(elapsedMs).toBeLessThan(60_000);
+  }, 65_000);
+
   it('baseline: fresh planning is deterministic and exact', async () => {
     const t0 = performance.now();
     const r = plan(els);

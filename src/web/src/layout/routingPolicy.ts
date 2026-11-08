@@ -52,7 +52,7 @@ export function effectiveObstaclePolicy(
   return 'forbidden';
 }
 
-function textRect(element: Exclude<Element, { kind: 'image' } | { kind: 'group' }>, text: TextBlock, measureWidth: TextWidthMeasurer): Rect | undefined {
+export function textRect(element: Exclude<Element, { kind: 'image' } | { kind: 'group' }>, text: TextBlock, measureWidth: TextWidthMeasurer): Rect | undefined {
   const measured = measureTextBox(text, element.bounds.width, element.bounds.height, measureWidth);
   if (measured.contentWidthPt <= 0 || measured.contentHeightPt <= 0) return undefined;
   const insets = textInsets(text), width = measured.contentWidthPt, height = measured.contentHeightPt;

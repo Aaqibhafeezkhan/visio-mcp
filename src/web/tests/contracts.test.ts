@@ -6,6 +6,18 @@ const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../cont
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 describe('R22 routing policy contracts', () => {
+  it('accepts the engine-owned beautified route marker and its result provenance', () => {
+    const document = structuredClone(fixture('samples.json').DiagramDocument);
+    const connector = document.pages.flatMap((page: any) => page.elements).find((element: any) => element.kind === 'connector');
+    connector.routing = { ...connector.routing, beautified: true };
+    expect(validateDef('DiagramDocument', document).valid).toBe(true);
+    expect(validateDef('TransactionResult', {
+      transactionId: U(1), previousRevision: 1, revision: 2, noChange: false,
+      created: [], changed: [], deleted: [], changedPageIds: [], changedLayerIds: [], changedAssetIds: [], visuallyAffectedIds: [], warnings: [], projectionStatus: 'applied',
+      routeChanges: [{ id: connector.id, provenance: 'beautified' }],
+    }).valid).toBe(true);
+  });
+
   it('routingPolicy_accepts_supported_values_and_rejects_unknown_or_out_of_range_values', () => {
     for (const obstacle of ['automatic', 'forbidden', 'avoid', 'passThrough']) {
       expect(validateDef('RoutingPolicy', { obstacle, clearancePt: 0, text: 'avoid' }).valid, obstacle).toBe(true);
@@ -41,6 +53,59 @@ describe('R22 routing policy contracts', () => {
     }
     expect(validateDef('Endpoint', { glue: 'dynamic', preferredSide: 'up' }).valid).toBe(false);
     expect(validateDef('EndpointInput', { glue: 'dynamic', preferredSide: 'up' }).valid).toBe(false);
+  });
+});
+
+describe('R24 routing contracts', () => {
+  it('accepts document crossing defaults and connector-only crossing policy and priority', () => {
+    const document = structuredClone(fixture('samples.json').DiagramDocument);
+    document.routingDefaults = { crossing: 'allow' };
+    const elements = document.pages.flatMap((page: any) => page.elements);
+    const connector = elements.find((element: any) => element.kind === 'connector');
+    connector.routingPolicy = { crossing: 'avoid', priority: -100 };
+    expect(validateDef('DiagramDocument', document).valid).toBe(true);
+    connector.routingPolicy.priority = 100;
+    expect(validateDef('DiagramDocument', document).valid).toBe(true);
+    connector.routingPolicy.priority = 101;
+    expect(validateDef('DiagramDocument', document).valid).toBe(false);
+  });
+
+  it('rejects connector crossing policy on shapes and text while keeping shared obstacle policy', () => {
+    const document = structuredClone(fixture('samples.json').DiagramDocument);
+    const elements = document.pages.flatMap((page: any) => page.elements);
+    const shape = elements.find((element: any) => element.kind === 'shape');
+    shape.routingPolicy = { obstacle: 'forbidden', crossing: 'avoid' };
+    expect(validateDef('DiagramDocument', document).valid).toBe(false);
+    delete shape.routingPolicy;
+    const text = elements.find((element: any) => element.kind === 'text');
+    if (text) text.routingPolicy = { priority: 2 };
+    expect(validateDef('DiagramDocument', document).valid).toBe(false);
+  });
+
+  it('accepts required endpoint sides and rejects an invalid side', () => {
+    for (const requiredSide of ['north', 'east', 'south', 'west']) {
+      expect(validateDef('Endpoint', { elementId: U(4), glue: 'dynamic', requiredSide }).valid, requiredSide).toBe(true);
+      expect(validateDef('EndpointInput', { elementId: U(4), glue: 'dynamic', requiredSide }).valid, requiredSide).toBe(true);
+    }
+    expect(validateDef('Endpoint', { glue: 'dynamic', requiredSide: 'up' }).valid).toBe(false);
+    expect(validateDef('Endpoint', { glue: 'none', point: { x: 0, y: 0 }, requiredSide: 'north' }).valid).toBe(false);
+    expect(validateDef('EndpointInput', { glue: 'none', point: { x: 0, y: 0 }, requiredSide: 'north' }).valid).toBe(false);
+    expect(validateDef('EndpointInput', { glue: 'none', point: { x: 0, y: 0 }, requiredSide: null }).valid).toBe(true);
+    expect(validateDef('EndpointInput', { glue: 'dynamic', requiredSide: 'north' }).valid).toBe(false);
+  });
+
+  it('accepts routing-defaults and exact-route beautify transaction operations', () => {
+    expect(validateOperation({ op: 'setRoutingDefaults', crossing: 'allow' }).ok).toBe(true);
+    expect(validateOperation({ op: 'setRoutingDefaults', crossing: 'invalid' }).ok).toBe(false);
+    expect(validateOperation({ op: 'beautify', baseRevision: 4, pageId: U(1), targets: [U(2)], includeManual: false,
+      routes: [{ id: U(2), points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }] }).ok).toBe(true);
+    expect(validateOperation({ op: 'set', target: U(2), patch: { routing: { mode: 'automatic', beautified: true } } }).ok).toBe(false);
+  });
+
+  it('accepts the required-side unresolved route finding', () => {
+    expect(validateDef('RouteFinding', {
+      code: 'ROUTE_REQUIRED_SIDE_UNRESOLVED', severity: 'error', message: 'blocked', elementId: U(1),
+    }).valid).toBe(true);
   });
 });
 const validBatch = () => ({

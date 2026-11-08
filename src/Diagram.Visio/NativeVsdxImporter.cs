@@ -970,6 +970,15 @@ public sealed class NativeVsdxImporter : IVsdxImporter
                 var way = new JsonArray();
                 if (u.TryGetValue("AgentWaypoints", out var wp)) { try { foreach (var n in JsonNode.Parse(wp)!.AsArray()) way.Add(new JsonObject { ["x"] = n!["x"]!.GetValue<double>(), ["y"] = n["y"]!.GetValue<double>() }); } catch (Exception e) when (e is JsonException or InvalidOperationException) { } }
                 el["waypoints"] = way;
+                if (u.TryGetValue("AgentAdvisory", out var advisory))
+                {
+                    try
+                    {
+                        var points = JsonNode.Parse(advisory)!.AsArray();
+                        if (points.Count >= 2) el["routing"] = new JsonObject { ["advisory"] = points.DeepClone() };
+                    }
+                    catch (Exception e) when (e is JsonException or InvalidOperationException) { }
+                }
                 var pattern = (int)D(rd.Line(s, "LinePattern"), 1);
                 el["style"] = new JsonObject
                 {

@@ -113,7 +113,24 @@
         "clearancePt": { "type": "number", "minimum": 0, "maximum": 2000 },
         "text": { "enum": ["ignore", "avoid"] }
       }
-    },    "TextInsets": {
+    },
+    "ConnectorRoutingPolicy": {
+      "type": "object", "additionalProperties": false,
+      "description": "R24. Connector obstacle and text settings plus explicit-Beautify crossing policy and priority.",
+      "properties": {
+        "obstacle": { "enum": ["automatic", "forbidden", "avoid", "passThrough"] },
+        "clearancePt": { "type": "number", "minimum": 0, "maximum": 2000 },
+        "text": { "enum": ["ignore", "avoid"] },
+        "crossing": { "enum": ["avoid", "allow"] },
+        "priority": { "type": "integer", "minimum": -100, "maximum": 100 }
+      }
+    },
+    "RoutingDefaults": {
+      "type": "object", "additionalProperties": false,
+      "description": "R24. Optional defaults used by explicit Beautify only.",
+      "properties": { "crossing": { "enum": ["avoid", "allow"] } }
+    },
+    "TextInsets": {
       "type": "object", "additionalProperties": false, "required": ["top", "right", "bottom", "left"],
       "properties": {
         "top": { "type": "number", "minimum": 0, "maximum": 2000 }, "right": { "type": "number", "minimum": 0, "maximum": 2000 },
@@ -187,12 +204,14 @@
     },
     "Endpoint": {
       "type": "object", "additionalProperties": false, "required": ["glue"],
+      "allOf": [{ "if": { "required": ["requiredSide"] }, "then": { "required": ["elementId"], "properties": { "glue": { "enum": ["dynamic", "static"] } } } }],
       "properties": {
         "elementId": { "$ref": "#/$defs/Uuid" },
         "port": { "type": "string", "minLength": 1, "maxLength": 64 },
         "point": { "$ref": "#/$defs/Point" },
         "glue": { "enum": ["dynamic", "static", "none"] },
         "preferredSide": { "enum": ["north", "east", "south", "west"], "description": "R22. Shape-local soft preference for a dynamic endpoint; named static ports take precedence." },
+        "requiredSide": { "enum": ["north", "east", "south", "west"], "description": "R24. Required shape-local side for this endpoint; conflicts with a static port are rejected." },
         "join": { "$ref": "#/$defs/Join", "description": "R16: this end is a branch joined to a place on another connector; glue is none and point is kept on that connector's route" }
       }
     },
@@ -287,7 +306,7 @@
         "bounds": { "$ref": "#/$defs/Bounds" },
         "rotationDeg": { "type": "number" },
         "metadata": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 4096 } },
-        "routingPolicy": { "$ref": "#/$defs/RoutingPolicy" },
+        "routingPolicy": { "$ref": "#/$defs/ConnectorRoutingPolicy" },
         "from": { "$ref": "#/$defs/Endpoint" },
         "to": { "$ref": "#/$defs/Endpoint" },
         "route": { "enum": ["straight", "orthogonal", "curved"] },
@@ -301,6 +320,7 @@
           "description": "R20. Orthogonal connectors only. The mode is stored only when it cannot be derived: no routing.mode and no waypoints is automatic, waypoints without a mode is manual, 'frozen' is stored. A route with constraints is guided.",
           "properties": {
             "mode": { "enum": ["frozen"] },
+            "beautified": { "const": true, "description": "R24. Engine-owned marker set when explicit Beautify commits a route. It keeps a clear route from ordinary straightening until explicit reroute; callers cannot set it." },
             "constraints": { "type": "array", "items": { "$ref": "#/$defs/RunConstraint" }, "maxItems": 64, "description": "R21. Runs of an automatic route that are held at a position (a guided route). Absent or empty: the router chooses every run. Only for automatic connectors; manual and frozen routes ignore it." },
             "advisory": { "type": "array", "items": { "$ref": "#/$defs/Point" }, "minItems": 2, "maxItems": 512, "description": "The route the router chose, anchors included. Derived: written by the command engine, never by a caller. Automatic: the router keeps it while it is valid. Frozen: it is the route and is never replaced." }
           }
@@ -375,6 +395,7 @@
         "pages": { "type": "array", "items": { "$ref": "#/$defs/Page" }, "minItems": 1, "maxItems": 1000 },
         "assets": { "type": "array", "items": { "$ref": "#/$defs/Asset" }, "maxItems": 10000 },
         "metadata": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 4096 } },
+        "routingDefaults": { "$ref": "#/$defs/RoutingDefaults" },
         "source": { "$ref": "#/$defs/DocumentSource" }
       }
     }
