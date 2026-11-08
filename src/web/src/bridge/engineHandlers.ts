@@ -6,6 +6,7 @@ import { validateDocument, validateMutationRequest, validateScriptRequest, valid
 import { drawScriptCompiler } from '../script/compiler';
 import type { Operation } from '../contracts/generated';
 import { listAssets, readObjects, readSummary } from './readTools';
+import { proposeRoutes } from './proposeRoutes';
 import { inspectLayout, type LayoutContext } from '../layout/inspectLayout';
 import { getTextLayout } from '../layout/textLayout';
 import type { Projection, Snapshot } from '../contracts/generated';
@@ -223,6 +224,8 @@ export function createEngineHandler(source: CommandEngine | EngineResolver, opts
           routeDiagnosticsStatus: { status: 'unavailable', reason: exportSnapshot.error.message },
         }) : objects);
       }
+      case 'doc.proposeRoutes':
+        return respond(await proposeRoutes(engine, scope, p));
       case 'assets.list': {
         const s = await engine.snapshot(scope);
         if (!s.ok) return respond(s);

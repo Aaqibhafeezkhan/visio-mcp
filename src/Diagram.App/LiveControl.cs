@@ -14,7 +14,7 @@ public sealed class LiveControl : IAsyncDisposable
 {
     static readonly HashSet<string> Offered = new()
     {
-        "docs.list", "docs.create", "docs.importVisio", "docs.show", "doc.summary", "doc.getObjects", "doc.apply", "doc.executeScript", "doc.changes", "doc.inspectLayout", "doc.textLayout", "doc.render", "doc.export", "assets.list", "reference.render", "reference.compare", "icons.search", "icons.get", "components.list", "components.get",
+        "docs.list", "docs.create", "docs.importVisio", "docs.show", "doc.summary", "doc.getObjects", "doc.apply", "doc.executeScript", "doc.changes", "doc.inspectLayout", "doc.proposeRoutes", "doc.textLayout", "doc.render", "doc.export", "assets.list", "reference.render", "reference.compare", "icons.search", "icons.get", "components.list", "components.get",
     };
 
     /// <summary>Calls that may omit the scope because they are how a client first learns it.</summary>

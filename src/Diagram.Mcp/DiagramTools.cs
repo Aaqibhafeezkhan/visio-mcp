@@ -356,6 +356,20 @@ public sealed class DiagramTools(PipeClient app)
         return Finish(await Send("doc.inspectLayout", documentId, sessionId, Obj(("pageId", pageId)), Read, ct));
     }
 
+    [McpServerTool(Name = "propose_routes"), Description("Read-only preview of rerouting automatic orthogonal connectors from scratch, before changing anything. Name connectorIds (UUIDs on one page) or give pageId alone for every eligible connector on that page (manual, frozen, non-orthogonal and locked connectors are listed in skipped). Returns the revision it read, each route's points in page points, provenance, reason, geometryChanged (whether the drawing would change), lengthPt and bends, plus routeFindings (UNRESOLVED_ROUTE and others) and visuallyAffectedIds (attached labels move too). commit is present only when the drawing would change, no route is unresolved and nothing outside the targets would change: pass commit.operations unchanged to apply_operations at commit.baseRevision with a new transactionId; a stale commit fails with revision_conflict. dependency_conflict names other connectors the reroute would change (include them) or joined connectors it cannot keep joined (reason join_not_followed). projection_failed means routes the answer depends on could not be read. " + Identity)]
+    public async Task<CallToolResult> ProposeRoutes(
+        [Description("The document id from get_document_summary.")] string documentId,
+        [Description("The session id from get_document_summary.")] string sessionId,
+        [Description("Connector UUIDs to reroute, 1 to 1000, all on one page. Omit to consider every connector on the page.")] string[]? connectorIds = null,
+        [Description("The page. Needed when connectorIds is omitted on a document with more than one page.")] string? pageId = null,
+        CancellationToken ct = default)
+    {
+        if (Check(("documentId", documentId), ("sessionId", sessionId)) is { } bad) return ToolErrors.Fail("invalid_request", bad);
+        if (pageId is not null && Check(("pageId", pageId)) is { } badPage) return ToolErrors.Fail("invalid_request", badPage);
+        return Finish(await Send("doc.proposeRoutes", documentId, sessionId,
+            Obj(("connectorIds", connectorIds is null ? null : new JsonArray(connectorIds.Select(i => (JsonNode)JsonValue.Create(i)!).ToArray())), ("pageId", pageId)), Read, ct));
+    }
+
     [McpServerTool(Name = "list_assets"), Description("Image assets: those pinned in the document (scope \"document\": ids, names, types, tags, how many images use each) and those in the user's approved library (scope \"library\"). A document entry wins an exact id match and says newerInLibrary when the library has changed. To place a library picture pass its id in execute_script libraryAssets. " + Identity)]
     public async Task<CallToolResult> ListAssets(
         [Description("The document id from get_document_summary.")] string documentId,

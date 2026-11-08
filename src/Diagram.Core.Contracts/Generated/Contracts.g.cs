@@ -182,6 +182,13 @@ public sealed record Attachment
     [JsonPropertyName("offsetPt")] public required double OffsetPt { get; init; }
 }
 
+public sealed record Container
+{
+    [JsonPropertyName("memberIds")] public required IReadOnlyList<string> MemberIds { get; init; }
+    [JsonPropertyName("fit")] public string? Fit { get; init; }
+    [JsonPropertyName("marginPt")] public double? MarginPt { get; init; }
+}
+
 public sealed record ShapeGeometry
 {
     [JsonPropertyName("preset")] public string? Preset { get; init; }
@@ -225,6 +232,7 @@ public sealed record ShapeElement : Element
     [JsonPropertyName("text")] public TextBlock? Text { get; init; }
     [JsonPropertyName("ports")] public IReadOnlyList<Port>? Ports { get; init; }
     [JsonPropertyName("attachment")] public Attachment? Attachment { get; init; }
+    [JsonPropertyName("container")] public Container? Container { get; init; }
 }
 
 public sealed record TextElement : Element
@@ -436,6 +444,7 @@ public sealed record ElementPatch
     [JsonPropertyName("hops")] public string? Hops { get; init; }
     [JsonPropertyName("ports")] public IReadOnlyList<Port>? Ports { get; init; }
     [JsonPropertyName("attachment")] public JsonObject? Attachment { get; init; }
+    [JsonPropertyName("container")] public JsonObject? Container { get; init; }
     [JsonPropertyName("labelAnchor")] public JsonObject? LabelAnchor { get; init; }
     [JsonPropertyName("routing")] public JsonObject? Routing { get; init; }
 }
@@ -455,6 +464,7 @@ public sealed record CreateShapeOp : Operation
     [JsonPropertyName("text")] public TextBlockPatch? Text { get; init; }
     [JsonPropertyName("ports")] public IReadOnlyList<Port>? Ports { get; init; }
     [JsonPropertyName("attachment")] public AttachmentInput? Attachment { get; init; }
+    [JsonPropertyName("container")] public ContainerInput? Container { get; init; }
 }
 
 public sealed record CreateTextOp : Operation
@@ -504,6 +514,13 @@ public sealed record CreateConnectorOp : Operation
     [JsonPropertyName("labelAnchor")] public LabelAnchorInput? LabelAnchor { get; init; }
     [JsonPropertyName("hops")] public string? Hops { get; init; }
     [JsonPropertyName("routing")] public JsonObject? Routing { get; init; }
+}
+
+public sealed record ContainerInput
+{
+    [JsonPropertyName("memberIds")] public IReadOnlyList<string>? MemberIds { get; init; }
+    [JsonPropertyName("fit")] public string? Fit { get; init; }
+    [JsonPropertyName("marginPt")] public double? MarginPt { get; init; }
 }
 
 public sealed record AttachmentInput
@@ -567,6 +584,7 @@ public sealed record DeleteOp : Operation
     [JsonPropertyName("target")] public required string Target { get; init; }
     [JsonPropertyName("withConnectors")] public bool? WithConnectors { get; init; }
     [JsonPropertyName("children")] public string? Children { get; init; }
+    [JsonPropertyName("members")] public string? Members { get; init; }
 }
 
 public sealed record RegisterAssetOp : Operation
@@ -646,6 +664,7 @@ public sealed record BeautifyOp : Operation
 [JsonDerivedType(typeof(ReplaceAssetOp), "replaceAsset")]
 [JsonDerivedType(typeof(MoveSegmentOp), "moveSegment")]
 [JsonDerivedType(typeof(PinSegmentOp), "pinSegment")]
+[JsonDerivedType(typeof(ContainOp), "contain")]
 public abstract record Operation;
 
 public sealed record DuplicateOp : Operation
@@ -669,6 +688,13 @@ public sealed record GroupOp : Operation
 public sealed record UngroupOp : Operation
 {
     [JsonPropertyName("target")] public required string Target { get; init; }
+}
+
+public sealed record ContainOp : Operation
+{
+    [JsonPropertyName("container")] public required string Container { get; init; }
+    [JsonPropertyName("add")] public IReadOnlyList<string>? Add { get; init; }
+    [JsonPropertyName("remove")] public IReadOnlyList<string>? Remove { get; init; }
 }
 
 public sealed record AlignOp : Operation

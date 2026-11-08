@@ -16,7 +16,7 @@ public class ToolTests
         "get_document_summary", "get_objects", "apply_operations", "execute_script", "render_page", "render_region",
         "inspect_layout", "list_assets", "get_changes", "export_document", "get_operation_schema", "get_text_layout",
         "render_reference_region", "compare_reference", "search_icons", "get_icon", "list_layout_components", "get_layout_component",
-        "list_documents", "create_document", "show_document", "import_visio",
+        "list_documents", "create_document", "show_document", "import_visio", "propose_routes",
     ];
 
     static string NewPipe() => $"mcp-test-{Guid.NewGuid():N}";
@@ -52,6 +52,49 @@ public class ToolTests
         { ["documentId"] = Doc, ["sessionId"] = Session, ["ids"] = Array.Empty<string>() }, cancellationToken: Ct());
         Assert.True(invalid.IsError);
         Assert.Equal(1, app.Count("doc.textLayout"));
+    }
+
+    [Fact]
+    public async Task ProposeRoutesForwardsTheSelectionAsAReadWithoutInventingATransaction()
+    {
+        var pipe = NewPipe(); var app = new FakeApp();
+        await using var server = PipeServer.Start(pipe, app.Handle);
+        await using var client = await Connect(pipe);
+        const string Page = "00000000-0000-4000-8000-000000000004", Link = "00000000-0000-4000-8000-000000000005";
+        var result = await client.CallToolAsync("propose_routes", new Dictionary<string, object?>
+        { ["documentId"] = Doc, ["sessionId"] = Session, ["connectorIds"] = new[] { Link }, ["pageId"] = Page }, cancellationToken: Ct());
+        Assert.True(result.IsError != true, result.StructuredContent?.ToString());
+        var sent = app.Last("doc.proposeRoutes");
+        Assert.Equal(Doc, sent.DocumentId); Assert.Equal(Session, sent.SessionId);
+        Assert.Equal(Link, sent.Params["connectorIds"]![0]!.GetValue<string>());
+        Assert.Equal(Page, sent.Params["pageId"]!.GetValue<string>());
+        Assert.False(sent.Params.ContainsKey("transactionId"));
+        Assert.False(sent.Params.ContainsKey("baseRevision"));
+
+        var pageWide = await client.CallToolAsync("propose_routes", new Dictionary<string, object?> { ["documentId"] = Doc, ["sessionId"] = Session }, cancellationToken: Ct());
+        Assert.True(pageWide.IsError != true);
+        Assert.Empty(app.Last("doc.proposeRoutes").Params); // nothing invented: the page decides what an empty selection means
+
+        var badPage = await client.CallToolAsync("propose_routes", new Dictionary<string, object?> { ["documentId"] = Doc, ["sessionId"] = Session, ["pageId"] = "page-1" }, cancellationToken: Ct());
+        Assert.True(badPage.IsError);
+        Assert.Equal(2, app.Count("doc.proposeRoutes"));
+    }
+
+    [Fact]
+    public async Task ApplyOperationsSendsNoPageScope()
+    {
+        // A proposal's commit is applied as is; reroute with UUID targets needs no page scope, which apply_operations does not have.
+        var pipe = NewPipe(); var app = new FakeApp();
+        await using var server = PipeServer.Start(pipe, app.Handle);
+        await using var client = await Connect(pipe);
+        var ops = JsonDocument.Parse("""[{"op":"reroute","targets":["00000000-0000-4000-8000-000000000005"]}]""").RootElement;
+        var result = await client.CallToolAsync("apply_operations", new Dictionary<string, object?>
+        { ["documentId"] = Doc, ["sessionId"] = Session, ["transactionId"] = Tx, ["baseRevision"] = 3, ["operations"] = ops }, cancellationToken: Ct());
+        Assert.True(result.IsError != true, result.StructuredContent?.ToString());
+        var sent = app.Last("doc.apply");
+        Assert.False(sent.Params.ContainsKey("pageId"));
+        Assert.Equal("reroute", sent.Params["operations"]![0]!["op"]!.GetValue<string>());
+        Assert.Equal(3, sent.Params["baseRevision"]!.GetValue<int>());
     }
 
     [Fact]
@@ -178,6 +221,7 @@ public class ToolTests
         Assert.Contains("UUID", body.GetProperty("guidance").GetProperty("targets").GetString());
         Assert.Contains("level first", body.GetProperty("guidance").GetProperty("editing").GetString());
         Assert.Contains("Group level changes", body.GetProperty("guidance").GetProperty("editing").GetString());
+        Assert.Contains("Membership changes only through contain", body.GetProperty("guidance").GetProperty("editing").GetString());
         Assert.Equal(protocol["$defs"]!["MutationRequest"]!["properties"]!["operations"]!["maxItems"]!.GetValue<int>(), body.GetProperty("limits").GetProperty("maxItems").GetInt32());
         var names = body.GetProperty("operations").EnumerateArray().Select(x => x.GetProperty("operation").GetString()!).ToArray();
         var expected = canonical["$defs"]!["Operation"]!["oneOf"]!.AsArray().Select(r =>
