@@ -21,6 +21,7 @@ import { planRoutes, routeDefects } from '../layout/routePlanner';
 import { addressOf, applyConstraints, moveSegment, readdress, segmentsOf, type RunConstraint } from '../layout/routeSegments';
 import { readDocumentDefaults, textDefaults } from '../model/documentDefaults';
 import { compareElementOrder, effectiveLevel } from '../model/elementOrder';
+import { lockedJoinDependents } from './joins';
 import { containerAncestors, containerParents, isContainer, type ContainerShape } from '../layout/containers';
 
 const BEAUTIFY_ROUTE_PAGE_MARGIN_PT = 24;
@@ -1318,6 +1319,8 @@ class Planner {
       if (el.routing?.mode === 'frozen') refuse('route_not_automatic', `frozen connector ${el.id} cannot be beautified`, { target: el.id });
       if (el.waypoints.length && !op.includeManual) refuse('route_not_automatic', `manual connector ${el.id} requires includeManual to convert it to Automatic`, { target: el.id });
       this.assertEditable(page, el, 'beautify');
+      const lockedDependents = lockedJoinDependents(page, el.id);
+      if (lockedDependents.length) refuse('locked_join_dependent', `connector ${el.id} has locked connectors joined to it: beautify refused`, { target: el.id, lockedConnectorIds: lockedDependents });
       if (el.hidden) refuse('hidden_target', `hidden connector ${el.id} cannot be beautified`, { target: el.id });
       if (item.points.length < 2) refuse('invalid_beautify_route', `route ${el.id} needs at least two points`, { target: el.id });
       for (const point of item.points) {

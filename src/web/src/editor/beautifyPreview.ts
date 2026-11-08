@@ -1,5 +1,6 @@
 import type { DiagramDocument, Element } from '../contracts/generated';
 import { effectiveState } from '../canvas/cellMapping';
+import { lockedJoinDependents } from '../commands/joins';
 import { BUDGET } from '../layout/obstacleRoute';
 import { planRoutes, type PlannedRoute } from '../layout/routePlanner';
 import type { TextWidthMeasurer } from '../layout/textMeasurement';
@@ -52,6 +53,7 @@ export async function buildBeautifyPreview(
     const state = effectiveState(element, page.layers);
     if (!state.visible) { skipped.push({ id, reason: 'hidden connectors are not eligible for Beautify' }); continue; }
     if (state.locked) { skipped.push({ id, reason: 'connector or assigned layer is locked' }); continue; }
+    if (lockedJoinDependents(page, id).length) { skipped.push({ id, reason: 'a locked connector is joined to this one' }); continue; }
     targets.push(id);
   }
 
