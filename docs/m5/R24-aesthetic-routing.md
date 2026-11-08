@@ -1,5 +1,7 @@
 # R24 aesthetic routing evidence
 
+> Every result above "Integration with main" is **historical**: it was recorded on the feature branch before it was merged with main (including the native Visio and Windows results). Only the last section is fresh evidence for the integrated head.
+
 ## Task 2 checkpoint — 2026-10-24
 
 Task 2 implementation and the 60-shape / 60-connector performance blocker are ready for review. The initial page-wide
@@ -64,3 +66,26 @@ the per-search state bound and completion under 30 seconds.
 ### Remaining acceptance limits
 
 The owner Lego VSDX file is unavailable here, and the full Windows UI suite did not complete. The targeted R05 and real-Visio checks passed. The broader editor/browser suite passed after Task 6; the final Task 7 web rerun passed 725/725.
+
+## Integration with main 3bb1228 (fresh, Linux)
+
+Feature head 05523b0 merged with origin/main 3bb1228 (R17 containers, H03 validators, H04 menu selection, R25 route proposals, A01 probe corrections) by merge commit cb736e3; feature commits are unchanged. Final candidate: see the build report in the mission slice for the exact SHA.
+
+**Conflicts and how they were resolved.** `CommandEngine.ts`: main moved the join/route/attachment settling into the shared `planOn` (R25), where R24 had it inline. R24's exact-route rule (a Beautify plan stores exact routes, so route settling and the hard-route preflight are skipped) and its required-side findings are now inside `planOn`, so transactions and R25 route proposals still plan through one chain. `planPatch.ts`: container fit settling (R17) runs before the plan is built; Beautify's exact routes are attached after it. `generated.ts` and `validators.generated.js` were regenerated from the schema, not merged by hand; all 35 operations (including Beautify, SetRoutingDefaults, Reroute, MoveSegment, PinSegment and Contain) are in the validator and tag maps and pass the union coverage guard.
+
+**New test:** `beautify.test.ts` - with a fitting container on the page, a Beautify commit changes only the target, leaves the container unchanged, and one undo restores both.
+
+| Check (Linux, Node via npm) | Result |
+|---|---|
+| `npx vitest run` | 78 files, 787/787 (786 at the merge, plus the new test; `beautify.test.ts` alone 11/11) |
+| `npm run typecheck`, `npm run generate:check`, `npm run build` | pass |
+| 60/60 Beautify workload (`routePlanner.test.ts`, `-t workload`) | 60 searched, max 80,000 expansions per search, 1,219,378 total, max 47,200 grid cells, max 6,317,119 estimated bytes, 5,228 ms |
+| Denser 60/90 workload (same run) | 90 searched, max 80,000 per search, 3,275,703 total, max 71,896 grid cells, max 8,418,364 estimated bytes, 19,925 ms |
+| Full browser suite (Playwright, config copy on port 5394) | 200 tests: 199 passed, 1 failed (`segments.spec.ts:54`, see below) |
+| `portable-check.sh` (.NET 10.0.403) | Mcp 16/16, Contracts 50/50, Visio 179/179; Host 20 and Ipc 2 failures equal the Linux baseline of 22, no new failures |
+
+The expansion, grid and memory counts equal the historical Windows run exactly, which is expected from a deterministic planner; the elapsed times are this machine's. No threshold was changed.
+
+`segments.spec.ts:54` (the Inspector's numeric run position did not commit on blur) failed once in the full suite and passed 36/36 over six runs of the whole file afterwards. The same test is recorded as intermittent in the R25 evidence; its cause is not established. `arrange.spec.ts:113`, the known Linux failure, passed in this run.
+
+**NOT RUN (fresh):** native Visio and Windows acceptance, `VisioAcceptanceTests`, the owner Lego VSDX drawing, Windows WebView2, a live MCP client. The 196/196 browser and 4/4 Visio 16.0 results above remain historical.
