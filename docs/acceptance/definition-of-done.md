@@ -4,6 +4,16 @@ Recorded 2026-10-18. Each criterion names the evidence that was actually produce
 "Evidenced" means a test or recorded run observed it on this machine (Windows 11, Visio 16.0 build 20430, Word, WebView2 155). It does not mean a person
 sat at the application: where a criterion says "manual" or "usable" in the spec, the caveat column says how far the evidence goes.
 
+## Live acceptance policy
+
+Owner decision, 2026-11-20: the manual tests listed in this document, in the [Visio and Word checklist](visio-word-checklist.md) and in the A02 current-build record ([#15](https://github.com/rp2839/visio-mcp/issues/15)) may be conducted by an agent operating the live system. A person is not required for functional checks. A person decides where the answer is a subjective aesthetic judgment (for example whether a layout or visual style is acceptable); an agent can assess basic outcomes.
+
+- **What counts as live operation.** Using the running application, Visio or Word through their windows (mouse, keyboard and screen, for example over remote desktop) on the identified build, and observing the result. Driving them through COM or an object model, a browser or UI-automation test, or a generated screenshot is automated evidence: it supports a result but is not a live manual check.
+- **PASS** means the operator performed the interaction on the identified build and observed the stated outcome. If the outcome could not be observed directly (for example a mode with no visible indicator), record what was inferred and from what, and do not claim more than was seen.
+- **Record, for every result:** the operator (a named person, or the agent and seat), the observation method, the environment (Windows, Visio, Word, .NET and display), the build (exact commit or version; write "unknown" rather than assume the latest commit), the uncertainty, and a link to the evidence.
+- **A Visio repair prompt fails WA-02** and the matching live step. Record the prompt's exact text; do not record it as a pass with a note.
+- **Provenance is kept.** Agent evidence is never relabelled as a person's, or the reverse. Past results keep the operator they actually had: the earlier M0 G1 checks stay human checks and the I52 Office runs stay automated. No earlier automated or partial result becomes a pass under this policy; items 18 and 19 below stay open until a current-build run is recorded under it.
+
 Original I52 suite record: web unit 289, browser 43, Contracts 24, Host 119, Ipc 17, Mcp 13, Visio 124, Windows 33 (run one at a time). All pass in that record.
 The later pull and fresh MCP sign-off run are recorded below and in [verification-summary.json](evidence/I52/mcp-signoff/verification-summary.json).
 The §23 demonstration is [evidence/DEMO](evidence/DEMO) (49 checks in `tools/demo/verify-demo.mjs`, all pass); timings are in [performance.md](performance.md).
@@ -70,7 +80,8 @@ These descriptions preserve the acceptance snapshot. Current work status and own
 2. **A complete manual pass on the current build is not recorded.** The earlier [M0 G1 results](../m0/results.md) explicitly record the user as manual
    checker for Visio editability, connector movement, and Word embedding/activation/save. The screenshot reproduction sessions also include real user review
    of agent-created output. These are useful human evidence, but do not prove every current editor gesture or dialog: the WPF consent window, recovery dialog
-   and library import dialog in the I52 suite were exercised through automation only. See the supplementary sign-off below.
+   and library import dialog in the I52 suite were exercised through automation only. See the supplementary sign-off below. A current-build pass can now be
+   recorded by a person or by an agent operating the live system, under the [live acceptance policy](#live-acceptance-policy); until one is recorded this item stays open.
 3. **Alignment diagnostics are conservative heuristics** (item 13). R05 detects nearby comparable peer boxes; grouped, rotated, custom-vector and free-text arrangements remain outside this check. See [R05](../m5/R05-regression.md).
 4. **Thread-pool starvation when a test process launches a child** (A05, [shim-startup-pause.md](shim-startup-pause.md)): not a freeze of the application and not specific to the shim; it scales with machine load (2 s at about 70 % busy, 5 s at 96 %) and the product never launches a process. The exact mechanism was not isolated.
 5. **Performance gaps found by A06 (#21, [performance.md](performance.md)):** a page preview with eight 6-megapixel pictures takes 1.4 to 1.5 s against the 1 s preferred target; `.vsdx` export refuses a document whose pictures exceed 64 MiB in all (reported as `internal_error`); selecting and dragging all 500 elements stalls the display for about 0.65 s at release. None was profiled.
@@ -83,7 +94,7 @@ These descriptions preserve the acceptance snapshot. Current work status and own
 Every criterion has actual evidence. Sixteen are evidenced as written; items 1, 13, 18 and 19 are evidenced with the stated limits (no complete current-build manual checklist,
 conservative alignment hints, Office driven by automation and not by hand). The proof-of-concept meets the specification as far as
 this evidence reaches; it does not claim the open M0 second-user pipe check, which is **not run**, and the "manual" tests in items 18 and 19 remain to be
-done by a person on the current build; the earlier G1 manual results remain valid evidence for the version tested there.
+done on the current build, by a person or by an agent operating the live system under the [live acceptance policy](#live-acceptance-policy); the earlier G1 manual results remain valid evidence for the version tested there.
 
 ## Supplementary MCP and screenshot-reproduction sign-off (2026-10-18)
 

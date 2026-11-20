@@ -19,4 +19,4 @@ The scenario is spec section 23, steps 10 to 14, on a drawing made through MCP: 
 | WA-11 | Unsupported or lossy content stays visible | a stencil-master shape drawn in Visio opens as an ordinary shape and the report names it (`master_inlined`); lossy export refusal is covered by the `compatibility_loss` tests |
 | WA-12 | Native segment of the demonstration, steps 10 to 14 | rows for steps 10, 11, 12, 13, 14 each PASS |
 
-Not part of this suite: spec steps 1 to 9 (done in I12 to I31; the logo swap is I50), and checks that need a person at the screen (the results file says what was not observed by a person).
+Not part of this suite: spec steps 1 to 9 (done in I12 to I31; the logo swap is I50), and checks that need live operation of the windows (the results file says what was not observed that way). This suite is automation. Live manual checks, by a person or by an agent operating the live system, follow the [live acceptance policy](definition-of-done.md#live-acceptance-policy); a person is needed only for subjective aesthetic judgments.
