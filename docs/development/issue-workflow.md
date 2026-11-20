@@ -44,7 +44,7 @@ Before review, record:
 
 - The branch and commit/PR links, what changed and the reason.
 - Exact verification commands and results; link repository evidence and distinguish historical runs from fresh tests.
-- Remaining work, compatibility limits and manual checks marked PASS, FAIL or NOT RUN. Unattended or deterministic automation (COM, prerecorded or replayed UI tests, browser test suites) is not manual sign-off; live operation of the real application or Office windows by a person, or by an agent directing input and inspecting screen captures as it goes, counts only when recorded under the [live acceptance policy](../acceptance/definition-of-done.md#live-acceptance-policy) with operator, method, environment, build and uncertainty.
+- Remaining work, compatibility limits and manual checks marked PASS, FAIL or NOT RUN. Unattended or deterministic automation (COM, prerecorded or replayed UI tests, browser test suites) is not manual sign-off; live operation of the real application or Office windows by a person, or by an agent directing input and looking at the screen as it goes, counts only when recorded under the [live acceptance policy](../acceptance/definition-of-done.md#live-acceptance-policy) with operator, method, environment, build and uncertainty.
 - Any overlap with another issue and which agent should pick up the next step.
 
 Before closing, verify the acceptance checklist, preserve relevant evidence in the repository, and confirm integration. Scope remaining work into linked follow-ups rather than hiding it in a completion comment.
