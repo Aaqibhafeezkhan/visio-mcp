@@ -271,3 +271,83 @@ test('with several shapes selected, the shared line colour changes all of them a
   await expect.poll(() => canonical(page)).toEqual(before);
   expect(errors).toEqual([]);
 });
+
+/** A02-07: two shapes of different fill and line must not show the first one's values as if both had them. */
+test('with shapes of different fill and line selected, the inspector marks what differs, and an edit sets only what it names', async ({ page }) => {
+  const { errors, a, b } = await setup(page);
+  const c0 = (await elements(page)).find(e => e.alias === 'c')!;
+  await page.evaluate(([ia, ib]) => (window as any).__editor.agentApply([
+    { op: 'set', target: ia, patch: { style: { fill: { kind: 'solid', colour: '#fde68a', opacity: 0.5 }, stroke: { kind: 'solid', colour: '#1d4ed8', opacity: 1 } } } },
+    { op: 'set', target: ib, patch: { style: { fill: { kind: 'solid', colour: '#bbf7d0', opacity: 1 }, stroke: { kind: 'none' } } } },
+  ]), [a.id, b.id] as const);
+  const shape = async (id: string) => (await elements(page)).find(e => e.id === id) as ShapeElement;
+  await expect.poll(async () => (await shape(b.id)).style.stroke.kind).toBe('none');
+  const ca = await centre(page, a.id), cb = await centre(page, b.id);
+  await page.mouse.click(ca.x, ca.y - 25);
+  await page.keyboard.down('Control');
+  await page.mouse.click(cb.x, cb.y - 25);
+  await page.keyboard.up('Control');
+  await expect(page.getByRole('heading', { name: '2 objects' })).toBeVisible();
+  const indeterminate = (testId: string) => page.getByTestId(testId).evaluate(n => (n as HTMLInputElement).indeterminate);
+
+  await test.step('each differing value is marked, none is shown as shared', async () => {
+    await expect(page.getByTestId('multi-fill-mixed')).toBeVisible();
+    await expect(page.getByTestId('multi-fill-colour')).toHaveAttribute('aria-label', 'Fill colour, mixed');
+    await expect(page.getByTestId('multi-fill-colour')).toHaveClass(/mixed/);
+    await expect(page.getByTestId('multi-fill-opacity')).toHaveValue('');
+    await expect(page.getByTestId('multi-fill-opacity')).toHaveAttribute('placeholder', '—');
+    expect(await indeterminate('multi-fill-none'), 'both fills are solid').toBe(false);
+    await expect(page.getByTestId('multi-stroke-mixed')).toBeVisible();
+    expect(await indeterminate('multi-stroke-none'), 'one line is none, the other is not').toBe(true);
+    await expect(page.getByTestId('multi-stroke-none')).not.toBeChecked();
+    await expect(page.getByTestId('multi-stroke-colour')).toHaveAttribute('aria-label', 'Line colour, mixed');
+  });
+
+  const before = await canonical(page);
+  const r0 = await revision(page);
+  await test.step('focusing and leaving the controls changes nothing', async () => {
+    for (const id of ['multi-fill-none', 'multi-fill-colour', 'multi-fill-opacity', 'multi-stroke-none', 'multi-stroke-colour', 'multi-stroke-opacity']) {
+      const control = page.getByTestId(id);
+      if (await control.isEnabled()) { await control.focus(); await control.blur(); }
+    }
+    expect(await revision(page)).toBe(r0);
+    expect(await canonical(page)).toEqual(before);
+  });
+
+  await test.step('a shared fill colour changes both fills, keeps each opacity and line, and is one undoable step', async () => {
+    await page.getByTestId('multi-fill-colour').fill('#7c3aed');
+    await expect.poll(async () => (await shape(a.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 0.5 });
+    const after = await canonical(page);
+    expect(await revision(page)).toBe(r0 + 1);
+    expect(differing(before, after).sort()).toEqual([a.id, b.id].sort());
+    expect((await shape(b.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 1 });
+    expect((await shape(a.id)).style.stroke).toEqual({ kind: 'solid', colour: '#1d4ed8', opacity: 1 });
+    expect((await shape(b.id)).style.stroke).toEqual({ kind: 'none' });
+    expect(after[c0.id]).toBe(before[c0.id]);
+    await expect(page.getByTestId('multi-fill-colour'), 'the colour is now shared').toHaveValue('#7c3aed');
+    await expect(page.getByTestId('multi-fill-colour')).not.toHaveClass(/mixed/);
+    await expect(page.getByTestId('multi-fill-opacity'), 'the opacity still differs').toHaveValue('');
+    await page.getByTestId('tool-undo').click();
+    await expect.poll(() => canonical(page)).toEqual(before);
+    await expect(page.getByTestId('multi-fill-colour')).toHaveClass(/mixed/);
+    await page.getByTestId('tool-redo').click();
+    await expect.poll(() => canonical(page)).toEqual(after);
+  });
+
+  await test.step('a shared opacity makes the fill fully shared and the mark goes', async () => {
+    await page.getByTestId('multi-fill-opacity').fill('80');
+    await expect.poll(async () => (await shape(b.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 0.8 });
+    expect((await shape(a.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 0.8 });
+    await expect(page.getByTestId('multi-fill-mixed')).toHaveCount(0);
+    await expect(page.getByTestId('multi-fill-opacity')).toHaveValue('80');
+  });
+
+  await test.step('choosing none for the line sets both and clears the mixed mark', async () => {
+    await page.getByTestId('multi-stroke-none').check();
+    await expect.poll(async () => (await shape(a.id)).style.stroke).toEqual({ kind: 'none' });
+    await expect(page.getByTestId('multi-stroke-mixed')).toHaveCount(0);
+    expect(await indeterminate('multi-stroke-none')).toBe(false);
+    expect((await shape(c0.id)).style).toEqual((JSON.parse(before[c0.id]!) as ShapeElement).style);
+  });
+  expect(errors).toEqual([]);
+});
