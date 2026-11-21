@@ -39,6 +39,8 @@ button:disabled { opacity: .45; cursor: default; }
 .field { display: grid; grid-template-columns: 62px 1fr; align-items: center; gap: 4px; margin: 3px 0; }
 .field input[type="number"], .field input[type="text"], .field select { width: 100%; min-width: 0; }
 .field.paint { grid-template-columns: 40px auto auto 1fr 50px; }
+.field.paint .mixed-note { grid-column: 1 / -1; color: var(--muted); }
+.field.paint input[type="color"].mixed::-webkit-color-swatch { background: repeating-linear-gradient(45deg, #cbd5e1 0 4px, #ffffff 4px 8px) !important; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
 .grid2 .field { grid-template-columns: 50px 1fr; }
 .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 3px 0; }

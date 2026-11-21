@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ConnectorElement, Element, ImageElement, Operation, Paint, RoutingPolicy, ShapeElement, TextBlock, TextElement } from '../contracts/generated';
 import type { EditorModel } from '../editor/EditorModel';
 import { ArrangePanel } from './ArrangePanel';
@@ -29,41 +29,89 @@ function NumberField({ label, value, onCommit, testId, step = 'any', min, max }:
   );
 }
 
-function PaintField({ label, paint, testId, onCommit, gradients = false }: { label: string; paint: Paint; testId: string; onCommit: (p: Paint) => void; gradients?: boolean }) {
-  if (paint.kind === 'linear-gradient') {
+/**
+ * How several shapes' paints differ. Undefined when they are all the same. Colour and opacity edits reach solid paints only, so those two
+ * are compared among the solid ones; `none` and `gradient` say whether some shapes are left out of them.
+ */
+interface PaintMix { colour: boolean; opacity: boolean; none: boolean; gradient: boolean }
+
+function paintMix(paints: Paint[]): PaintMix | undefined {
+  const differ = (ps: Paint[], key: (p: Paint) => unknown) => new Set(ps.map(p => JSON.stringify(key(p)))).size > 1;
+  if (!differ(paints, p => p)) return undefined;
+  const solid = paints.filter(p => p.kind === 'solid');
+  return {
+    colour: differ(solid, p => p.kind === 'solid' && p.colour), opacity: differ(solid, p => p.kind === 'solid' && p.opacity),
+    none: paints.some(p => p.kind === 'none'), gradient: paints.some(p => p.kind === 'linear-gradient'),
+  };
+}
+
+const mixNote = (mix: PaintMix) => [
+  'Not the same on every selected shape.',
+  mix.none && 'Colour and opacity leave the ones with none alone.',
+  mix.gradient && 'Gradients are kept as they are; select them on their own to edit them.',
+].filter(Boolean).join(' ');
+
+/**
+ * A fill or line. It commits an edit rather than a whole paint, so that with several shapes selected each keeps what the edit does not name.
+ * `mix` marks the parts that differ between them: those show no value, and nothing is written until one is changed. Colour and opacity
+ * change solid paints only, so a gradient is never flattened and a shape with none keeps it.
+ */
+function PaintField({ label, paint, testId, onCommit, gradients = false, mix }: { label: string; paint: Paint; testId: string; onCommit: (edit: (p: Paint) => Paint) => void; gradients?: boolean; mix?: PaintMix }) {
+  const noneBox = useRef<HTMLInputElement>(null);
+  // mixed means some have none and some do not (they cannot all have none, or they would be the same)
+  useEffect(() => { if (noneBox.current) noneBox.current.indeterminate = Boolean(mix?.none); });
+  if (paint.kind === 'linear-gradient' && !mix) {
     const first = paint.stops[0]!, last = paint.stops[paint.stops.length - 1]!;
     const withStops = (a: typeof first, b: typeof last): Paint => ({ ...paint, stops: [a, ...paint.stops.slice(1, -1), b] });
+    const commit = (p: Paint) => onCommit(() => p);
     return (
       <div className="field paint gradient" data-testid={`${testId}-gradient`}>
         <span>{label}</span>
-        <select value="gradient" aria-label={`${label} type`} data-testid={`${testId}-kind`} onChange={e => onCommit(e.target.value === 'solid' ? { kind: 'solid', colour: first.colour, opacity: first.opacity } : e.target.value === 'none' ? { kind: 'none' } : paint)}>
+        <select value="gradient" aria-label={`${label} type`} data-testid={`${testId}-kind`} onChange={e => commit(e.target.value === 'solid' ? { kind: 'solid', colour: first.colour, opacity: first.opacity } : e.target.value === 'none' ? { kind: 'none' } : paint)}>
           <option value="solid">Solid</option><option value="gradient">Gradient</option><option value="none">None</option>
         </select>
-        <input type="color" value={first.colour} aria-label={`${label} gradient start`} data-testid={`${testId}-stop-first`} onChange={e => onCommit(withStops({ ...first, colour: e.target.value }, last))} />
-        <input type="color" value={last.colour} aria-label={`${label} gradient end`} data-testid={`${testId}-stop-last`} onChange={e => onCommit(withStops(first, { ...last, colour: e.target.value }))} />
+        <input type="color" value={first.colour} aria-label={`${label} gradient start`} data-testid={`${testId}-stop-first`} onChange={e => commit(withStops({ ...first, colour: e.target.value }, last))} />
+        <input type="color" value={last.colour} aria-label={`${label} gradient end`} data-testid={`${testId}-stop-last`} onChange={e => commit(withStops(first, { ...last, colour: e.target.value }))} />
         <input type="number" min={-360} max={360} value={paint.angleDeg} aria-label={`${label} gradient angle`} data-testid={`${testId}-angle`}
-          onChange={e => onCommit({ ...paint, angleDeg: Math.min(360, Math.max(-360, Number(e.target.value) || 0)) })} />
+          onChange={e => commit({ ...paint, angleDeg: Math.min(360, Math.max(-360, Number(e.target.value) || 0)) })} />
         <small>° (0 left to right, 90 top to bottom){paint.stops.length > 2 ? `, ${paint.stops.length} stops` : ''}</small>
       </div>
     );
   }
   const colour = paint.kind === 'solid' ? paint.colour : '#ffffff';
   const opacity = paint.kind === 'solid' ? paint.opacity : 1;
+  const off = paint.kind !== 'solid'; // with several shapes, `paint` is a solid one whenever any is
   return (
-    <div className="field paint">
+    <div className={`field paint${mix ? ' mixed' : ''}`}>
       <span>{label}</span>
-      <input type="checkbox" checked={paint.kind === 'none'} aria-label={`${label}: none`} data-testid={`${testId}-none`}
-        onChange={e => onCommit(e.target.checked ? { kind: 'none' } : { kind: 'solid', colour, opacity })} /> <small>none</small>
-      <input type="color" value={colour} disabled={paint.kind === 'none'} data-testid={`${testId}-colour`}
-        onChange={e => onCommit({ kind: 'solid', colour: e.target.value, opacity })} />
-      <input type="number" min={0} max={100} value={Math.round(opacity * 100)} disabled={paint.kind === 'none'} aria-label={`${label} opacity %`} data-testid={`${testId}-opacity`}
-        onChange={e => onCommit({ kind: 'solid', colour, opacity: Math.min(1, Math.max(0, Number(e.target.value) / 100)) })} />
-      {gradients && paint.kind === 'solid' && (
+      <input type="checkbox" ref={noneBox} checked={paint.kind === 'none' && !mix} aria-label={`${label}: none`} data-testid={`${testId}-none`}
+        onChange={e => onCommit(p => e.target.checked ? { kind: 'none' } : p.kind === 'none' ? { kind: 'solid', colour, opacity } : p)} /> <small>none</small>
+      <input type="color" value={colour} disabled={off} className={mix?.colour ? 'mixed' : undefined} aria-label={`${label} colour${mix?.colour ? ', mixed' : ''}`} data-testid={`${testId}-colour`}
+        onChange={e => onCommit(p => p.kind === 'solid' ? { ...p, colour: e.target.value } : p)} />
+      <input type="number" min={0} max={100} value={mix?.opacity ? '' : Math.round(opacity * 100)} placeholder={mix?.opacity ? '—' : undefined} disabled={off} aria-label={`${label} opacity %${mix?.opacity ? ', mixed' : ''}`} data-testid={`${testId}-opacity`}
+        onChange={e => onCommit(p => p.kind === 'solid' ? { ...p, opacity: Math.min(1, Math.max(0, Number(e.target.value) / 100)) } : p)} />
+      {gradients && paint.kind === 'solid' && !mix && (
         <button type="button" data-testid={`${testId}-to-gradient`} title="Blend from this colour to white"
-          onClick={() => onCommit({ kind: 'linear-gradient', angleDeg: 90, stops: [{ offset: 0, colour, opacity }, { offset: 1, colour: '#ffffff', opacity }] })}>Gradient</button>
+          onClick={() => onCommit(() => ({ kind: 'linear-gradient', angleDeg: 90, stops: [{ offset: 0, colour, opacity }, { offset: 1, colour: '#ffffff', opacity }] }))}>Gradient</button>
       )}
+      {mix && <small className="mixed-note" data-testid={`${testId}-mixed`}>{mixNote(mix)}</small>}
     </div>
   );
+}
+
+/** Several shapes' fill or line: shown once, with what differs marked; an edit changes only the shapes it alters. */
+function MultiPaintField({ label, testId, shapes, part, model }: { label: string; testId: string; shapes: ShapeElement[]; part: 'fill' | 'stroke'; model: EditorModel }) {
+  const paints = shapes.map(s => s.style[part]);
+  const mix = paintMix(paints);
+  const shown = mix ? paints.find(p => p.kind === 'solid') ?? paints.find(p => p.kind === 'none') ?? paints[0]! : paints[0]!;
+  const commit = (edit: (p: Paint) => Paint) => {
+    const ops = shapes.flatMap(s => {
+      const next = edit(s.style[part]);
+      return JSON.stringify(next) === JSON.stringify(s.style[part]) ? [] : [{ op: 'set', target: s.id, patch: { style: { [part]: next } } } as Operation];
+    });
+    if (ops.length) void model.apply('inspector', ops);
+  };
+  return <PaintField label={label} testId={testId} paint={shown} mix={mix} onCommit={commit} />;
 }
 
 /** R17: a container's fit and margin, and for a member the container it is in. Each change is one transaction, as elsewhere here. */
@@ -172,8 +220,8 @@ export function Inspector({ model }: { model: EditorModel }) {
         {shapes.length > 0 && (
           <section>
             <h3>Style</h3>
-            <PaintField label="Fill" testId="multi-fill" paint={shapes[0]!.style.fill} onCommit={fill => void model.apply('inspector', shapes.map(s => ({ op: 'set', target: s.id, patch: { style: { fill } } }) as Operation))} />
-            <PaintField label="Line" testId="multi-stroke" paint={shapes[0]!.style.stroke} onCommit={stroke => void model.apply('inspector', shapes.map(s => ({ op: 'set', target: s.id, patch: { style: { stroke } } }) as Operation))} />
+            <MultiPaintField label="Fill" testId="multi-fill" shapes={shapes} part="fill" model={model} />
+            <MultiPaintField label="Line" testId="multi-stroke" shapes={shapes} part="stroke" model={model} />
           </section>
         )}
         {pinnable.length > 0 && (
@@ -303,8 +351,8 @@ function ShapeStyle({ el, set }: { model: EditorModel; el: ShapeElement; set: (p
   return (
     <section>
       <h3>Style</h3>
-      <PaintField label="Fill" testId="field-fill" paint={el.style.fill} gradients onCommit={fill => set({ style: { fill } })} />
-      <PaintField label="Line" testId="field-stroke" paint={el.style.stroke} onCommit={stroke => set({ style: { stroke } })} />
+      <PaintField label="Fill" testId="field-fill" paint={el.style.fill} gradients onCommit={edit => set({ style: { fill: edit(el.style.fill) } })} />
+      <PaintField label="Line" testId="field-stroke" paint={el.style.stroke} onCommit={edit => set({ style: { stroke: edit(el.style.stroke) } })} />
       <div className="grid2">
         <NumberField label="Width pt" testId="field-strokewidth" value={el.style.strokeWidthPt} min={0} onCommit={v => set({ style: { strokeWidthPt: v } })} />
         <label className="field"><span>Dash</span>
