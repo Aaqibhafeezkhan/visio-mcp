@@ -29,19 +29,32 @@ function NumberField({ label, value, onCommit, testId, step = 'any', min, max }:
   );
 }
 
-/** How several shapes' paints differ. Undefined when they are all the same. */
-interface PaintMix { kind: boolean; colour: boolean; opacity: boolean }
+/**
+ * How several shapes' paints differ. Undefined when they are all the same. Colour and opacity edits reach solid paints only, so those two
+ * are compared among the solid ones; `none` and `gradient` say whether some shapes are left out of them.
+ */
+interface PaintMix { kind: boolean; colour: boolean; opacity: boolean; none: boolean; gradient: boolean }
 
 function paintMix(paints: Paint[]): PaintMix | undefined {
-  const same = (key: (p: Paint) => unknown) => new Set(paints.map(p => JSON.stringify(key(p)))).size === 1;
-  if (same(p => p)) return undefined;
-  const allSolid = paints.every(p => p.kind === 'solid');
-  return { kind: !same(p => p.kind), colour: !allSolid || !same(p => p.kind === 'solid' && p.colour), opacity: !allSolid || !same(p => p.kind === 'solid' && p.opacity) };
+  const differ = (ps: Paint[], key: (p: Paint) => unknown) => new Set(ps.map(p => JSON.stringify(key(p)))).size > 1;
+  if (!differ(paints, p => p)) return undefined;
+  const solid = paints.filter(p => p.kind === 'solid');
+  return {
+    kind: differ(paints, p => p.kind), colour: differ(solid, p => p.kind === 'solid' && p.colour), opacity: differ(solid, p => p.kind === 'solid' && p.opacity),
+    none: paints.some(p => p.kind === 'none'), gradient: paints.some(p => p.kind === 'linear-gradient'),
+  };
 }
+
+const mixNote = (mix: PaintMix) => [
+  'Not the same on every selected shape.',
+  mix.none && 'Colour and opacity leave the ones with none alone.',
+  mix.gradient && 'Gradients are kept as they are; select them on their own to edit them.',
+].filter(Boolean).join(' ');
 
 /**
  * A fill or line. It commits an edit rather than a whole paint, so that with several shapes selected each keeps what the edit does not name.
- * `mix` marks the parts that differ between them: those show no value, and nothing is written until one is changed.
+ * `mix` marks the parts that differ between them: those show no value, and nothing is written until one is changed. Colour and opacity
+ * change solid paints only, so a gradient is never flattened and a shape with none keeps it.
  */
 function PaintField({ label, paint, testId, onCommit, gradients = false, mix }: { label: string; paint: Paint; testId: string; onCommit: (edit: (p: Paint) => Paint) => void; gradients?: boolean; mix?: PaintMix }) {
   const noneBox = useRef<HTMLInputElement>(null);
@@ -66,21 +79,21 @@ function PaintField({ label, paint, testId, onCommit, gradients = false, mix }: 
   }
   const colour = paint.kind === 'solid' ? paint.colour : '#ffffff';
   const opacity = paint.kind === 'solid' ? paint.opacity : 1;
-  const off = paint.kind === 'none' && !mix?.kind;
+  const off = paint.kind !== 'solid'; // with several shapes, `paint` is a solid one whenever any is
   return (
     <div className={`field paint${mix ? ' mixed' : ''}`}>
       <span>{label}</span>
       <input type="checkbox" ref={noneBox} checked={paint.kind === 'none' && !mix?.kind} aria-label={`${label}: none`} data-testid={`${testId}-none`}
         onChange={e => onCommit(p => e.target.checked ? { kind: 'none' } : p.kind === 'none' ? { kind: 'solid', colour, opacity } : p)} /> <small>none</small>
       <input type="color" value={colour} disabled={off} className={mix?.colour ? 'mixed' : undefined} aria-label={`${label} colour${mix?.colour ? ', mixed' : ''}`} data-testid={`${testId}-colour`}
-        onChange={e => onCommit(p => ({ kind: 'solid', colour: e.target.value, opacity: p.kind === 'solid' ? p.opacity : 1 }))} />
+        onChange={e => onCommit(p => p.kind === 'solid' ? { ...p, colour: e.target.value } : p)} />
       <input type="number" min={0} max={100} value={mix?.opacity ? '' : Math.round(opacity * 100)} placeholder={mix?.opacity ? '—' : undefined} disabled={off} aria-label={`${label} opacity %${mix?.opacity ? ', mixed' : ''}`} data-testid={`${testId}-opacity`}
         onChange={e => onCommit(p => p.kind === 'solid' ? { ...p, opacity: Math.min(1, Math.max(0, Number(e.target.value) / 100)) } : p)} />
       {gradients && paint.kind === 'solid' && !mix && (
         <button type="button" data-testid={`${testId}-to-gradient`} title="Blend from this colour to white"
           onClick={() => onCommit(() => ({ kind: 'linear-gradient', angleDeg: 90, stops: [{ offset: 0, colour, opacity }, { offset: 1, colour: '#ffffff', opacity }] }))}>Gradient</button>
       )}
-      {mix && <small className="mixed-note" data-testid={`${testId}-mixed`}>Not the same on every selected shape.</small>}
+      {mix && <small className="mixed-note" data-testid={`${testId}-mixed`}>{mixNote(mix)}</small>}
     </div>
   );
 }

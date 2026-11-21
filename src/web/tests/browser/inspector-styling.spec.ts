@@ -300,7 +300,8 @@ test('with shapes of different fill and line selected, the inspector marks what 
     await expect(page.getByTestId('multi-stroke-mixed')).toBeVisible();
     expect(await indeterminate('multi-stroke-none'), 'one line is none, the other is not').toBe(true);
     await expect(page.getByTestId('multi-stroke-none')).not.toBeChecked();
-    await expect(page.getByTestId('multi-stroke-colour')).toHaveAttribute('aria-label', 'Line colour, mixed');
+    await expect(page.getByTestId('multi-stroke-colour'), 'only one line is solid, so its colour is not mixed').toHaveAttribute('aria-label', 'Line colour');
+    await expect(page.getByTestId('multi-stroke-mixed')).toContainText('leave the ones with none alone');
   });
 
   const before = await canonical(page);
@@ -348,6 +349,70 @@ test('with shapes of different fill and line selected, the inspector marks what 
     await expect(page.getByTestId('multi-stroke-mixed')).toHaveCount(0);
     expect(await indeterminate('multi-stroke-none')).toBe(false);
     expect((await shape(c0.id)).style).toEqual((JSON.parse(before[c0.id]!) as ShapeElement).style);
+  });
+  expect(errors).toEqual([]);
+});
+
+/** Colour and opacity reach solid paints only: typing works with a none or gradient shape in the selection, and a gradient is never flattened. */
+test('with a solid fill selected beside none and gradient fills, opacity can be typed and the others are kept exactly', async ({ page }) => {
+  const { errors, a, b } = await setup(page);
+  const c = (await elements(page)).find(e => e.alias === 'c')!;
+  const shape = async (id: string) => (await elements(page)).find(e => e.id === id) as ShapeElement;
+  const fills = (fa: unknown, fb: unknown, fc: unknown) => page.evaluate(([ia, ib, ic, x, y, z]) => (window as any).__editor.agentApply([
+    { op: 'set', target: ia, patch: { style: { fill: x } } }, { op: 'set', target: ib, patch: { style: { fill: y } } }, { op: 'set', target: ic, patch: { style: { fill: z } } },
+  ]), [a.id, b.id, c.id, fa, fb, fc] as const);
+  const select = async (...ids: string[]) => {
+    await page.getByTestId('canvas').click({ position: { x: 5, y: 5 } });
+    for (const [i, id] of ids.entries()) {
+      const p = await centre(page, id);
+      if (i) await page.keyboard.down('Control');
+      await page.mouse.click(p.x, p.y - (id === c.id ? 0 : 25));
+      if (i) await page.keyboard.up('Control');
+    }
+    await expect(page.getByRole('heading', { name: `${ids.length} objects` })).toBeVisible();
+  };
+  const gradient = { kind: 'linear-gradient', angleDeg: 30, stops: [{ offset: 0, colour: '#2563eb', opacity: 1 }, { offset: 0.4, colour: '#f59e0b', opacity: 0.7 }, { offset: 1, colour: '#ffffff', opacity: 1 }] };
+
+  await test.step('solid beside none: typing 50 gives 0.5 and the box shows 50; the none fill stays none', async () => {
+    await fills({ kind: 'solid', colour: '#fde68a', opacity: 0.2 }, { kind: 'none' }, { kind: 'solid', colour: '#ffffff', opacity: 1 });
+    await select(a.id, b.id);
+    await expect(page.getByTestId('multi-fill-opacity')).toHaveValue('20');
+    await page.getByTestId('multi-fill-opacity').fill('');
+    await page.getByTestId('multi-fill-opacity').pressSequentially('50');
+    await expect.poll(async () => (await shape(a.id)).style.fill).toEqual({ kind: 'solid', colour: '#fde68a', opacity: 0.5 });
+    await expect(page.getByTestId('multi-fill-opacity')).toHaveValue('50');
+    expect((await shape(b.id)).style.fill).toEqual({ kind: 'none' });
+  });
+
+  await test.step('solid beside a gradient: colour and opacity change the solid one, the gradient keeps every stop, and the note says so', async () => {
+    await fills({ kind: 'solid', colour: '#fde68a', opacity: 0.2 }, gradient, { kind: 'solid', colour: '#ffffff', opacity: 1 });
+    await select(a.id, b.id);
+    await expect(page.getByTestId('multi-fill-mixed')).toContainText('Gradients are kept as they are');
+    await expect(page.getByTestId('multi-fill-gradient'), 'no gradient editor for differing paints').toHaveCount(0);
+    await page.getByTestId('multi-fill-colour').fill('#7c3aed');
+    await expect.poll(async () => (await shape(a.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 0.2 });
+    await page.getByTestId('multi-fill-opacity').fill('60');
+    await expect.poll(async () => (await shape(a.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 0.6 });
+    await expect(page.getByTestId('multi-fill-opacity')).toHaveValue('60');
+    expect((await shape(b.id)).style.fill).toEqual(gradient);
+  });
+
+  await test.step('two different gradients: colour and opacity are unavailable and nothing is changed', async () => {
+    await fills(gradient, { ...gradient, angleDeg: 90 }, { kind: 'solid', colour: '#ffffff', opacity: 1 });
+    await select(a.id, b.id);
+    await expect(page.getByTestId('multi-fill-colour')).toBeDisabled();
+    await expect(page.getByTestId('multi-fill-opacity')).toBeDisabled();
+    await expect(page.getByTestId('multi-fill-mixed')).toContainText('select them on their own');
+  });
+
+  await test.step('identical gradients keep the shared gradient editor, and an angle edit sets both', async () => {
+    await fills(gradient, gradient, { kind: 'solid', colour: '#ffffff', opacity: 1 });
+    await select(a.id, b.id);
+    await expect(page.getByTestId('multi-fill-gradient')).toBeVisible();
+    await page.getByTestId('multi-fill-angle').fill('45');
+    await expect.poll(async () => ((await shape(a.id)).style.fill as { angleDeg: number }).angleDeg).toBe(45);
+    expect((await shape(b.id)).style.fill).toEqual({ ...gradient, angleDeg: 45 });
+    expect((await shape(c.id)).style.fill).toEqual({ kind: 'solid', colour: '#ffffff', opacity: 1 });
   });
   expect(errors).toEqual([]);
 });
