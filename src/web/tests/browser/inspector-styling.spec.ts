@@ -388,6 +388,8 @@ test('with a solid fill selected beside none and gradient fills, opacity can be 
     await fills({ kind: 'solid', colour: '#fde68a', opacity: 0.2 }, gradient, { kind: 'solid', colour: '#ffffff', opacity: 1 });
     await select(a.id, b.id);
     await expect(page.getByTestId('multi-fill-mixed')).toContainText('Gradients are kept as they are');
+    await expect(page.getByTestId('multi-fill-none'), 'neither fill is none').not.toBeChecked();
+    expect(await page.getByTestId('multi-fill-none').evaluate(n => (n as HTMLInputElement).indeterminate), 'solid beside gradient is not "some none"').toBe(false);
     await expect(page.getByTestId('multi-fill-gradient'), 'no gradient editor for differing paints').toHaveCount(0);
     await page.getByTestId('multi-fill-colour').fill('#7c3aed');
     await expect.poll(async () => (await shape(a.id)).style.fill).toEqual({ kind: 'solid', colour: '#7c3aed', opacity: 0.2 });

@@ -33,14 +33,14 @@ function NumberField({ label, value, onCommit, testId, step = 'any', min, max }:
  * How several shapes' paints differ. Undefined when they are all the same. Colour and opacity edits reach solid paints only, so those two
  * are compared among the solid ones; `none` and `gradient` say whether some shapes are left out of them.
  */
-interface PaintMix { kind: boolean; colour: boolean; opacity: boolean; none: boolean; gradient: boolean }
+interface PaintMix { colour: boolean; opacity: boolean; none: boolean; gradient: boolean }
 
 function paintMix(paints: Paint[]): PaintMix | undefined {
   const differ = (ps: Paint[], key: (p: Paint) => unknown) => new Set(ps.map(p => JSON.stringify(key(p)))).size > 1;
   if (!differ(paints, p => p)) return undefined;
   const solid = paints.filter(p => p.kind === 'solid');
   return {
-    kind: differ(paints, p => p.kind), colour: differ(solid, p => p.kind === 'solid' && p.colour), opacity: differ(solid, p => p.kind === 'solid' && p.opacity),
+    colour: differ(solid, p => p.kind === 'solid' && p.colour), opacity: differ(solid, p => p.kind === 'solid' && p.opacity),
     none: paints.some(p => p.kind === 'none'), gradient: paints.some(p => p.kind === 'linear-gradient'),
   };
 }
@@ -58,7 +58,8 @@ const mixNote = (mix: PaintMix) => [
  */
 function PaintField({ label, paint, testId, onCommit, gradients = false, mix }: { label: string; paint: Paint; testId: string; onCommit: (edit: (p: Paint) => Paint) => void; gradients?: boolean; mix?: PaintMix }) {
   const noneBox = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (noneBox.current) noneBox.current.indeterminate = Boolean(mix?.kind); });
+  // mixed means some have none and some do not (they cannot all have none, or they would be the same)
+  useEffect(() => { if (noneBox.current) noneBox.current.indeterminate = Boolean(mix?.none); });
   if (paint.kind === 'linear-gradient' && !mix) {
     const first = paint.stops[0]!, last = paint.stops[paint.stops.length - 1]!;
     const withStops = (a: typeof first, b: typeof last): Paint => ({ ...paint, stops: [a, ...paint.stops.slice(1, -1), b] });
@@ -83,7 +84,7 @@ function PaintField({ label, paint, testId, onCommit, gradients = false, mix }: 
   return (
     <div className={`field paint${mix ? ' mixed' : ''}`}>
       <span>{label}</span>
-      <input type="checkbox" ref={noneBox} checked={paint.kind === 'none' && !mix?.kind} aria-label={`${label}: none`} data-testid={`${testId}-none`}
+      <input type="checkbox" ref={noneBox} checked={paint.kind === 'none' && !mix} aria-label={`${label}: none`} data-testid={`${testId}-none`}
         onChange={e => onCommit(p => e.target.checked ? { kind: 'none' } : p.kind === 'none' ? { kind: 'solid', colour, opacity } : p)} /> <small>none</small>
       <input type="color" value={colour} disabled={off} className={mix?.colour ? 'mixed' : undefined} aria-label={`${label} colour${mix?.colour ? ', mixed' : ''}`} data-testid={`${testId}-colour`}
         onChange={e => onCommit(p => p.kind === 'solid' ? { ...p, colour: e.target.value } : p)} />
